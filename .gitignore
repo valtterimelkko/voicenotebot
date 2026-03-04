@@ -1,0 +1,106 @@
+# Security-focused .gitignore for VoiceNote Bot
+
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+log/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Audio files (downloaded voice notes)
+*.oga
+*.ogg
+*.mp3
+*.wav
+*.m4a
+audio_files/
+downloads/
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Docker
+.dockerignore
+
+# Database (if any local SQLite for testing)
+*.db
+*.sqlite
+*.sqlite3
+
+# Redis dump
+*.rdb
+dump.rdb
+
+# SSL/TLS certificates (if any)
+*.pem
+*.key
+*.crt
+
+# Sensitive configuration files
+config.yaml
+config.yml
+secrets.yaml
+secrets.yml
+credentials.json
+service-account.json
+
+# Build artifacts
+*.tar.gz
+*.zip
+
+# Node modules (if any frontend)
+node_modules/
+
+# Local development files
+.docker-compose.override.yml
