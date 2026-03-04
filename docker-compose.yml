@@ -5,7 +5,7 @@ services:
     # Port not exposed externally - only internal communication
     volumes:
       - redis_data:/data
-    restart: unless-stopped
+    restart: always
     networks:
       - default
     healthcheck:
@@ -29,7 +29,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    restart: unless-stopped
+    restart: always
     networks:
       - default
       - whisper_network
@@ -59,7 +59,7 @@ services:
           memory: 3G
         reservations:
           memory: 1G
-    restart: unless-stopped
+    restart: always
     networks:
       - default
       - whisper_network

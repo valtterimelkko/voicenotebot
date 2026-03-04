@@ -1,341 +1,363 @@
 # VoiceNote Bot
 
-A Telegram voice-to-text transcription bot built with FastAPI, RQ (Redis Queue), OpenAI Whisper, and Kimi API.
-
-## Overview
-
-VoiceNote Bot receives voice messages from Telegram users, transcribes them using OpenAI Whisper, and provides intelligent summaries and action items using the Kimi API. The system is designed with a worker queue architecture to handle concurrent transcription jobs efficiently while managing resource constraints.
+A robust, queue-based Telegram voice-to-text transcription bot using FastAPI, RQ (Redis Queue), OpenAI Whisper (local), and Kimi API for transcript cleanup.
 
 ## Architecture
 
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Telegram      │────▶│    Webhook       │────▶│     Redis       │
-│   (Voice Msg)   │     │   (FastAPI)      │     │    (Queue)      │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-                                                            │
-                              ┌─────────────────────────────┘
-                              │
-                              ▼
-              ┌─────────────────────────────────────────────┐
-              │                 Workers (2 replicas)        │
-              │  ┌─────────────┐      ┌─────────────┐       │
-              │  │  Worker 1   │      │  Worker 2   │       │
-              │  │  (max 3GB)  │      │  (max 3GB)  │       │
-              │  └─────────────┘      └─────────────┘       │
-              └─────────────────────────────────────────────┘
-                              │
-                              ▼
-              ┌─────────────────────────────────────────────┐
-              │          External Whisper Service           │
-              │          (OpenAI Whisper API)               │
-              │              Port: 8000                     │
-              └─────────────────────────────────────────────┘
-                              │
-                              ▼
-              ┌─────────────────────────────────────────────┐
-              │              Kimi API                       │
-              │     (Summarization & Action Items)          │
-              └─────────────────────────────────────────────┘
-                              │
-                              ▼
-              ┌─────────────────────────────────────────────┐
-              │           Telegram API                      │
-              │      (Send transcription back)              │
-              └─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           VoiceNote Bot Architecture                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   ┌──────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────┐  │
+│   │ Telegram │────▶│  Caddy Proxy │────▶│   Webhook    │────▶│  Redis   │  │
+│   │   Bot    │     │   (HTTPS)    │     │   (FastAPI)  │     │  Queue   │  │
+│   └──────────┘     └──────────────┘     └──────────────┘     └────┬─────┘  │
+│         ▲                                                         │        │
+│         │                                                         ▼        │
+│         │                              ┌─────────────────────────────────┐ │
+│         │                              │           Workers               │ │
+│         │                              │  ┌─────────────┐ ┌────────────┐ │ │
+│         │                              │  │ Worker 1    │ │ Worker 2   │ │ │
+│         │                              │  │ (max 3GB)   │ │ (max 3GB)  │ │ │
+│         │                              │  └──────┬──────┘ └─────┬──────┘ │ │
+│         │                              └─────────┼──────────────┼────────┘ │
+│         │                                        │              │          │
+│         │                                        └──────┬───────┘          │
+│         │                                               │                  │
+│         │                                               ▼                  │
+│         │                              ┌─────────────────────────────────┐ │
+│         │                              │     External Services           │ │
+│         │                              │  ┌──────────┐  ┌─────────────┐  │ │
+│         │                              │  │ Whisper  │  │  Kimi API   │  │ │
+│         │                              │  │ (local)  │  │  (remote)   │  │ │
+│         │                              │  └──────────┘  └─────────────┘  │ │
+│         │                              └─────────────────────────────────┘ │
+│         │                                                                   │
+│         └───────────────────────────────────────────────────────────────────┘
+│                                    (Send transcription result back)         │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Components
+## Services & Components
 
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| Webhook | FastAPI | Receives Telegram webhooks, enqueues jobs |
-| Queue | Redis | Manages transcription job queue |
-| Workers | RQ + Python | Process voice transcriptions (max 2 concurrent) |
-| Whisper | External Service | Speech-to-text conversion |
-| Kimi API | External LLM | Summarization and action extraction |
+### Core Services
 
-## Prerequisites
+| Service | Technology | Purpose | Location |
+|---------|------------|---------|----------|
+| **Webhook** | FastAPI + Uvicorn | Receives Telegram webhooks, enqueues jobs | `webhook/` |
+| **Worker** | Python + RQ | Processes voice notes (2 replicas) | `worker/` |
+| **Queue** | Redis | Job queue management | Docker container |
+| **Shared** | Python modules | Telegram client, Kimi client, logger | `shared/` |
 
-- Docker Engine 20.10+
-- Docker Compose 2.0+
-- Running Whisper service (external)
-- Telegram Bot Token
-- Kimi API Key
+### External Dependencies
 
-## Setup Instructions
+| Service | Location | Description |
+|---------|----------|-------------|
+| **Whisper** | `/root/whisper/` | Local OpenAI Whisper ASR service |
+| **Kimi API** | `api.kimi.com` | Remote LLM for transcript cleanup |
+| **Telegram** | `api.telegram.org` | Telegram Bot API |
 
-### 1. Clone and Navigate
+## Whisper Service Details
+
+The local Whisper service is located at `/root/whisper/` and runs as a separate Docker container.
+
+### API Endpoint
+
+```
+POST http://whisper:9000/asr
+```
+
+### Request Format
+
+```python
+files = {"audio_file": (filename, file_content, mime_type)}
+data = {"language": "auto"}
+
+# Supported MIME types:
+# - audio/ogg (.oga, .ogg)
+# - audio/mpeg (.mp3)
+# - audio/mp4 (.m4a)
+# - audio/wav (.wav)
+# - audio/webm (.webm)
+```
+
+### Response Format
+
+Whisper returns the transcription as **plain text** (not JSON):
+
+```
+This is the transcribed text from the voice note.
+```
+
+## Logging Strategy
+
+All services use **structured logging** with [structlog](https://www.structlog.org/):
+
+- **Format**: JSON in production, colored console in development
+- **Levels**: INFO for normal operations, DEBUG for troubleshooting
+- **Fields**: timestamp, level, filename, lineno, and contextual data
+
+### Log Locations
 
 ```bash
-cd /root/voicenotebot
+# View webhook logs
+docker logs -f voicenotebot-webhook
+
+# View worker logs
+docker logs -f voicenotebot-worker-1
+docker logs -f voicenotebot-worker-2
+
+# View Redis logs
+docker logs -f voicenotebot-redis
 ```
 
-### 2. Configure Environment Variables
+### Key Log Events
 
-Create a `.env` file based on `.env.example`:
+| Event | Level | Description |
+|-------|-------|-------------|
+| `webhook_processed_successfully` | INFO | Voice message received and queued |
+| `transcription_job_enqueued` | INFO | Job added to Redis queue |
+| `Whisper transcription successful` | INFO | ASR completed |
+| `transcript_cleaned` | INFO | Kimi cleanup completed |
+| `Voice note transcription complete` | INFO | Full pipeline succeeded |
+| `Whisper transcription error` | ERROR | ASR failed with details |
 
+## Quick Start
+
+### Prerequisites
+
+- Docker & Docker Compose installed
+- Telegram Bot Token (from @BotFather)
+- Kimi API Key
+- Existing Whisper service running at `/root/whisper/`
+
+### Environment Setup
+
+1. Copy the example environment file:
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with your credentials:
-
-```env
-# Telegram
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
-WEBHOOK_SECRET=your_webhook_secret_here
-
-# Kimi AI
-KIMI_API_KEY=your_kimi_api_key_here
-
-# Redis (uses service name in Docker)
-REDIS_URL=redis://redis:6379/0
-
-# Whisper Service URL (external container)
-WHISPER_URL=http://whisper:8000
-
-# Logging
-LOG_LEVEL=INFO
-```
-
-### 3. External Whisper Network Setup
-
-The Whisper service is already running via Docker Compose at `/root/whisper/`. The bot connects to it through the `whisper_network` external network.
-
-If the network connection needs to be established:
-
+2. Edit `.env` with your credentials:
 ```bash
-# Connect whisper container to the shared network
-docker network connect n8n-docker-caddy_default whisper
+TELEGRAM_BOT_TOKEN=your_token_here
+KIMI_API_KEY=your_key_here
 ```
-
-Verify the whisper container is accessible:
-
-```bash
-docker ps | grep whisper
-```
-
-### 4. Build and Start Services
-
-```bash
-# Build all services
-docker compose build
-
-# Start all services
-docker compose up -d
-
-# Or combine build and start
-docker compose up -d --build
-```
-
-## Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Yes | - | Telegram Bot API token from @BotFather |
-| `KIMI_API_KEY` | Yes | - | Kimi API access key |
-| `REDIS_URL` | No | `redis://redis:6379/0` | Redis connection string |
-| `WHISPER_URL` | No | `http://whisper:8000` | Whisper service endpoint |
-| `WEBHOOK_SECRET` | Yes | - | Secret for webhook validation |
-| `LOG_LEVEL` | No | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
-
-See `.env.example` for the complete list of configuration options.
-
-## Running the System
 
 ### Start Services
 
 ```bash
+# Start all services
 docker compose up -d
-```
 
-### View Logs
+# Verify all containers are running
+docker compose ps
 
-```bash
-# All services
-docker compose logs -f
-
-# Specific service
-docker compose logs -f webhook
-docker compose logs -f worker
-docker compose logs -f redis
+# Check health endpoint
+curl http://localhost:9999/health
 ```
 
 ### Stop Services
 
 ```bash
+# Stop all services gracefully
 docker compose down
-```
 
-### Stop and Remove Volumes
-
-```bash
+# Stop and remove all data (including Redis queue)
 docker compose down -v
 ```
 
-## Testing
-
-### 1. Health Check
+### Restart Services
 
 ```bash
-# Check webhook health
-curl http://localhost:8000/health
-```
+# Restart all
+docker compose restart
 
-### 2. Redis Connection
-
-```bash
-# Connect to Redis
-docker compose exec redis redis-cli ping
-# Expected: PONG
-```
-
-### 3. Test Telegram Webhook
-
-Set the webhook URL in Telegram:
-
-```bash
-curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
-  -H "Content-Type: application/json" \
-  -d '{"url":"https://your-domain.com/webhook"}'
-```
-
-### 4. Send Test Voice Message
-
-Send a voice message to your Telegram bot and check the logs:
-
-```bash
-docker compose logs -f worker
-```
-
-## Monitoring/Logs
-
-### Real-time Log Monitoring
-
-```bash
-# Follow all logs
-docker compose logs -f
-
-# Follow with timestamps
-docker compose logs -f --timestamps
-
-# Last 100 lines
-docker compose logs --tail=100
-```
-
-### Worker Queue Status
-
-```bash
-# Connect to Redis and check queue
-docker compose exec redis redis-cli LLEN rq:queue:default
-
-# Monitor RQ queues
-docker compose exec redis redis-cli MONITOR
-```
-
-### Resource Usage
-
-```bash
-# Container stats
-docker stats voicenotebot-webhook voicenotebot-redis
-
-# All project containers
-docker compose ps
-```
-
-## Troubleshooting
-
-### Webhook Not Responding
-
-```bash
-# Check webhook container logs
-docker compose logs webhook
-
-# Verify health endpoint
-curl -v http://localhost:8000/health
-```
-
-### Workers Not Processing Jobs
-
-```bash
-# Check worker logs
-docker compose logs worker
-
-# Verify Redis connection
-docker compose exec worker python -c "import redis; r = redis.from_url('redis://redis:6379/0'); print(r.ping())"
-
-# Check queue length
-docker compose exec redis redis-cli LLEN rq:queue:default
-```
-
-### Whisper Service Unreachable
-
-```bash
-# Test whisper connectivity from worker
-docker compose exec worker curl http://whisper:8000/health
-
-# Verify network connection
-docker network inspect n8n-docker-caddy_default
-```
-
-### Memory Issues
-
-Workers are limited to 3GB RAM each. If transcription fails:
-
-```bash
-# Check container memory usage
-docker stats --no-stream
-
-# Restart workers
+# Restart specific service
 docker compose restart worker
+docker compose restart webhook
 ```
 
-### Redis Connection Errors
+## Debugging Guide
+
+### Check Service Status
 
 ```bash
-# Restart Redis
-docker compose restart redis
+# List all containers
+docker compose ps
 
-# Check Redis data volume
-docker volume inspect voicenotebot_redis_data
+# Check resource usage
+docker stats --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.Status}}"
+```
+
+### Monitor Queue
+
+```bash
+# Check pending jobs
+docker exec voicenotebot-redis redis-cli LLEN rq:queue:default
+
+# Check failed jobs
+docker exec voicenotebot-redis redis-cli ZCARD rq:failed:default
+
+# View failed job details
+docker exec voicenotebot-redis redis-cli ZRANGE rq:failed:default 0 -1
+
+# Clear failed jobs
+docker exec voicenotebot-redis redis-cli DEL rq:failed:default
+```
+
+### Debug Worker Issues
+
+```bash
+# Follow worker logs in real-time
+docker logs -f voicenotebot-worker-1
+
+# Check for import errors
+docker exec voicenotebot-worker-1 python3 -c "from tasks import process_voice_note; print('OK')"
+
+# Test Whisper connectivity
+docker exec voicenotebot-worker-1 python3 -c "
+import httpx
+r = httpx.get('http://whisper:9000/health', timeout=10)
+print(f'Status: {r.status_code}')
+"
+```
+
+### Debug Webhook Issues
+
+```bash
+# Test webhook locally
+curl -X POST http://localhost:9999/webhook \
+  -H "Content-Type: application/json" \
+  -d '{"message":{"voice":{"file_id":"test"},"chat":{"id":123}}}'
+
+# Check Telegram webhook status
+curl "https://api.telegram.org/bot<YOUR_TOKEN>/getWebhookInfo"
+
+# View webhook logs
+docker logs voicenotebot-webhook --tail 50
+```
+
+### Common Issues
+
+| Issue | Solution |
+|-------|----------|
+| Worker can't find tasks | Check `tasks.py` exists at root, rebuild workers |
+| Whisper returns empty | Verify MIME type is set (audio/ogg for .oga files) |
+| Kimi API errors | Check API key, verify token limits |
+| Queue growing | Check worker logs for errors, ensure 2 workers running |
+| Webhook 404 | Verify Caddy config, check webhook URL |
+
+## Production Deployment
+
+### Persistence & Restart Policy
+
+All containers are configured with `restart: always` to:
+- Restart on crash
+- Start automatically after server reboot
+- Recover from Docker daemon restarts
+
+### Resource Limits
+
+- **Worker**: 3GB RAM limit per worker (2 workers max = 6GB peak)
+- **Webhook**: Minimal resources (stateless)
+- **Redis**: Uses volume for data persistence
+
+### Monitoring
+
+```bash
+# Set up a simple health check script
+#!/bin/bash
+# health_check.sh
+
+if ! curl -sf http://localhost:9999/health > /dev/null; then
+    echo "$(date): Webhook unhealthy, restarting..."
+    docker compose restart webhook
+fi
+```
+
+### Backup
+
+```bash
+# Backup Redis data
+docker exec voicenotebot-redis redis-cli SAVE
+docker cp voicenotebot-redis:/data/dump.rdb /backup/redis-$(date +%Y%m%d).rdb
+```
+
+## File Structure
+
+```
+.
+├── docker-compose.yml      # Container orchestration
+├── .env                    # Environment variables (not in git)
+├── .env.example            # Environment template
+├── .gitignore              # Git ignore rules
+├── tasks.py                # Root-level RQ task exports
+├── shared/                 # Shared utilities
+│   ├── __init__.py
+│   ├── logger.py          # Structured logging
+│   ├── telegram_client.py # Telegram API wrapper
+│   ├── kimi_client.py     # Kimi API wrapper
+│   └── requirements.txt
+├── webhook/               # FastAPI webhook service
+│   ├── Dockerfile
+│   ├── main.py
+│   └── requirements.txt
+├── worker/                # RQ worker service
+│   ├── Dockerfile
+│   ├── tasks.py          # Main processing logic
+│   └── requirements.txt
+└── tests/                 # Test suite
+    ├── conftest.py
+    ├── test_webhook.py
+    ├── test_tasks.py
+    └── test_integration.py
+```
+
+## Development
+
+### Running Tests
+
+```bash
+# Install test dependencies
+pip install -r tests/requirements.txt
+
+# Run all tests
+pytest tests/
+
+# Run with coverage
+pytest tests/ --cov=shared --cov=worker --cov=webhook
+```
+
+### Rebuilding After Changes
+
+```bash
+# Rebuild specific service
+docker compose build worker
+docker compose up -d --force-recreate worker
+
+# Rebuild all
+docker compose build
+docker compose up -d
 ```
 
 ## Security Notes
 
-1. **Environment Variables**: Never commit `.env` files to version control. The `.dockerignore` file excludes them.
+- `.env` file contains secrets and is **gitignored**
+- Redis is not exposed externally (no port mapping)
+- Webhook uses HTTPS via Caddy reverse proxy
+- Workers have memory limits to prevent OOM crashes
 
-2. **Webhook Secret**: Always set a strong `WEBHOOK_SECRET` to validate incoming Telegram webhooks.
+## License
 
-3. **Network Isolation**: Services communicate through isolated Docker networks:
-   - `default`: Internal communication between bot services
-   - `whisper_network`: External network for Whisper service access
+Private - For personal use only.
 
-4. **Container Permissions**: Services run as non-root users where possible (configured in Dockerfiles).
+## Troubleshooting Support
 
-5. **Resource Limits**: Workers have strict memory limits (3GB) to prevent resource exhaustion.
-
-6. **Redis**: Not exposed to the public internet (only internal network access).
-
-7. **API Keys**: Rotate `TELEGRAM_BOT_TOKEN` and `KIMI_API_KEY` regularly.
-
----
-
-## Development
-
-For local development without Docker:
-
+For issues or questions, check the logs first:
 ```bash
-# Install dependencies
-pip install -r webhook/requirements.txt
-pip install -r worker/requirements.txt
-
-# Start Redis locally
-redis-server
-
-# Run webhook
-python webhook/main.py
-
-# Run worker
-python worker/worker.py
+docker compose logs -f --tail 100
 ```
+
+Then refer to the [Debugging Guide](#debugging-guide) section above.
