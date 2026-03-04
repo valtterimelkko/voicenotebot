@@ -5,6 +5,7 @@ RQ worker tasks for processing voice note transcription:
 download → whisper → kimi → send result
 """
 
+import asyncio
 import os
 import sys
 import tempfile
@@ -43,9 +44,22 @@ ERROR_FINAL_RETRY = (
     "Please try again or send a shorter voice note."
 )
 
-# Initialize clients
-telegram_client = TelegramClient(token=TELEGRAM_BOT_TOKEN)
-kimi_client = KimiClient()
+
+def _run_async(coro):
+    """Run an async coroutine in a sync context."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If there's already a running loop, use run_coroutine_threadsafe
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, coro)
+                return future.result()
+        else:
+            return loop.run_until_complete(coro)
+    except RuntimeError:
+        # No event loop running, create a new one
+        return asyncio.run(coro)
 
 
 def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None) -> dict:
@@ -65,35 +79,55 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
     Raises:
         Exception: Re-raises exceptions for RQ retry mechanism
     """
-    job_id = structlog.contextvars.get_contextvars().get("job_id", "unknown")
-    
     logger.info(
         "Starting voice note transcription job",
-        job_id=job_id,
         file_id=file_id,
         chat_id=chat_id,
         message_id=message_id,
     )
     
     temp_file_path = None
+    telegram_client = None
+    kimi_client = None
     
     try:
-        # Step 1: Get file path from Telegram
-        logger.debug("Getting file path from Telegram", file_id=file_id)
-        file_path = _get_telegram_file_path(file_id)
+        # Initialize clients
+        telegram_client = TelegramClient(token=TELEGRAM_BOT_TOKEN)
+        kimi_client = KimiClient()
+        
+        # Step 1: Get file info from Telegram
+        logger.debug("Getting file info from Telegram", file_id=file_id)
+        file_info = _run_async(telegram_client.get_file(file_id))
+        file_path = file_info.get("file_path")
         
         if not file_path:
             logger.error("Failed to get file path", file_id=file_id)
-            telegram_client.send_message(chat_id=chat_id, text=ERROR_GENERAL)
+            _run_async(telegram_client.send_message(chat_id=chat_id, text=ERROR_GENERAL))
             return {"success": False, "error": "failed_to_get_file_path"}
+        
+        # Check file size from Telegram metadata if available
+        file_size = file_info.get("file_size", 0)
+        if file_size and file_size > MAX_FILE_SIZE_BYTES:
+            logger.warning(
+                "File too large (from metadata)",
+                file_size_bytes=file_size,
+                max_size_bytes=MAX_FILE_SIZE_BYTES,
+            )
+            _run_async(telegram_client.send_message(chat_id=chat_id, text=ERROR_FILE_TOO_LARGE))
+            return {"success": False, "error": "file_too_large"}
         
         # Step 2: Download voice file
         logger.debug("Downloading voice file", file_path=file_path)
-        temp_file_path = _download_voice_file(file_path)
+        file_bytes = _run_async(telegram_client.download_file(file_path))
         
-        # Step 3: Check file size
+        # Step 3: Save to temp file and check size
+        suffix = Path(file_path).suffix or ".oga"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(file_bytes)
+            temp_file_path = temp_file.name
+        
         file_size = os.path.getsize(temp_file_path)
-        logger.debug("Voice file downloaded", file_size_bytes=file_size)
+        logger.debug("Voice file saved", file_size_bytes=file_size)
         
         if file_size > MAX_FILE_SIZE_BYTES:
             logger.warning(
@@ -101,7 +135,7 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
                 file_size_bytes=file_size,
                 max_size_bytes=MAX_FILE_SIZE_BYTES,
             )
-            telegram_client.send_message(chat_id=chat_id, text=ERROR_FILE_TOO_LARGE)
+            _run_async(telegram_client.send_message(chat_id=chat_id, text=ERROR_FILE_TOO_LARGE))
             return {"success": False, "error": "file_too_large"}
         
         # Step 4: Transcribe with Whisper
@@ -110,7 +144,7 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
         
         if not transcript:
             logger.error("Whisper transcription returned empty")
-            telegram_client.send_message(chat_id=chat_id, text=ERROR_WHISPER_FAILED)
+            _run_async(telegram_client.send_message(chat_id=chat_id, text=ERROR_WHISPER_FAILED))
             return {"success": False, "error": "whisper_empty_transcript"}
         
         logger.debug(
@@ -120,7 +154,15 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
         
         # Step 5: Clean up with Kimi API
         logger.debug("Sending to Kimi for cleanup")
-        cleaned_text = _cleanup_with_kimi(transcript)
+        try:
+            cleaned_text = _run_async(kimi_client.cleanup_transcript(transcript))
+        except KimiError as e:
+            error_str = str(e).lower()
+            if "token" in error_str or "length" in error_str or "too long" in error_str:
+                logger.warning("Kimi token limit exceeded")
+                _run_async(telegram_client.send_message(chat_id=chat_id, text=ERROR_KIMI_TOKEN_LIMIT))
+                raise
+            raise
         
         if not cleaned_text:
             logger.warning("Kimi cleanup returned empty, using raw transcript")
@@ -130,7 +172,7 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
         
         # Step 6: Send result to user
         logger.debug("Sending transcription to user")
-        telegram_client.send_message(chat_id=chat_id, text=cleaned_text)
+        _run_async(telegram_client.send_message(chat_id=chat_id, text=cleaned_text))
         
         logger.info(
             "Voice note transcription complete",
@@ -148,20 +190,33 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
         logger.exception("Transcription job failed", error=str(e))
         
         # Send appropriate error message based on exception type
-        error_message = _get_error_message_for_exception(e)
-        try:
-            telegram_client.send_message(chat_id=chat_id, text=error_message)
-        except Exception as send_error:
-            logger.error(
-                "Failed to send error message to user",
-                error=str(send_error),
-            )
+        if telegram_client:
+            error_message = _get_error_message_for_exception(e)
+            try:
+                _run_async(telegram_client.send_message(chat_id=chat_id, text=error_message))
+            except Exception as send_error:
+                logger.error(
+                    "Failed to send error message to user",
+                    error=str(send_error),
+                )
         
         # Re-raise for RQ retry mechanism
         raise
         
     finally:
-        # Step 7: Clean up temp file
+        # Clean up clients
+        if telegram_client:
+            try:
+                _run_async(telegram_client.close())
+            except Exception:
+                pass
+        if kimi_client:
+            try:
+                _run_async(kimi_client.close())
+            except Exception:
+                pass
+        
+        # Clean up temp file
         if temp_file_path and os.path.exists(temp_file_path):
             try:
                 os.remove(temp_file_path)
@@ -172,81 +227,6 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
                     temp_file=temp_file_path,
                     error=str(e),
                 )
-
-
-def _get_telegram_file_path(file_id: str) -> str | None:
-    """
-    Get file path from Telegram using getFile API.
-    
-    Args:
-        file_id: Telegram file ID
-        
-    Returns:
-        File path on Telegram servers or None if failed
-    """
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile"
-    
-    try:
-        response = httpx.get(url, params={"file_id": file_id}, timeout=30.0)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get("ok") and data.get("result", {}).get("file_path"):
-            return data["result"]["file_path"]
-        else:
-            logger.error(
-                "Telegram getFile returned error",
-                response=data,
-            )
-            return None
-            
-    except httpx.HTTPStatusError as e:
-        logger.error(
-            "HTTP error getting file path",
-            status_code=e.response.status_code,
-            error=str(e),
-        )
-        return None
-    except Exception as e:
-        logger.error("Failed to get file path", error=str(e))
-        return None
-
-
-def _download_voice_file(file_path: str) -> str:
-    """
-    Download voice file from Telegram to temp location.
-    
-    Args:
-        file_path: File path from Telegram getFile API
-        
-    Returns:
-        Path to downloaded temp file
-        
-    Raises:
-        Exception: If download fails
-    """
-    download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
-    
-    # Create temp file with appropriate extension
-    suffix = Path(file_path).suffix or ".oga"
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    temp_file_path = temp_file.name
-    temp_file.close()
-    
-    try:
-        with httpx.stream("GET", download_url, timeout=60.0) as response:
-            response.raise_for_status()
-            with open(temp_file_path, "wb") as f:
-                for chunk in response.iter_bytes(chunk_size=8192):
-                    f.write(chunk)
-        
-        return temp_file_path
-        
-    except Exception as e:
-        # Clean up temp file on error
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
-        raise Exception(f"Failed to download voice file: {e}")
 
 
 def _transcribe_with_whisper(audio_file_path: str) -> str | None:
@@ -294,48 +274,6 @@ def _transcribe_with_whisper(audio_file_path: str) -> str | None:
         raise Exception(f"Whisper transcription failed: {e}")
 
 
-def _cleanup_with_kimi(transcript: str) -> str | None:
-    """
-    Clean up transcript using Kimi API.
-    
-    Args:
-        transcript: Raw transcript from Whisper
-        
-    Returns:
-        Cleaned text or None if failed
-        
-    Raises:
-        KimiError: If Kimi API returns token limit error
-        Exception: For other failures
-    """
-    system_prompt = (
-        "You are a helpful assistant that cleans up voice transcriptions. "
-        "Fix grammar, punctuation, and formatting while preserving the original meaning. "
-        "Keep the same language as the input. "
-        "Do not add any introductory text or explanations. "
-        "Return only the cleaned transcription."
-    )
-    
-    try:
-        cleaned = kimi_client.chat_completion(
-            system_prompt=system_prompt,
-            user_message=transcript,
-            max_tokens=4096,
-        )
-        return cleaned.strip() if cleaned else None
-        
-    except KimiError as e:
-        # Check if it's a token limit error
-        error_str = str(e).lower()
-        if "token" in error_str or "length" in error_str or "too long" in error_str:
-            logger.warning("Kimi token limit exceeded")
-            raise KimiError("token_limit_exceeded")
-        raise
-    except Exception as e:
-        logger.error("Kimi cleanup error", error=str(e))
-        return None
-
-
 def _get_error_message_for_exception(e: Exception) -> str:
     """
     Get appropriate error message based on exception type.
@@ -349,8 +287,13 @@ def _get_error_message_for_exception(e: Exception) -> str:
     error_str = str(e).lower()
     
     # Check for token limit errors
-    if "token_limit_exceeded" in error_str or isinstance(e, KimiError):
+    if "token_limit_exceeded" in error_str:
         return ERROR_KIMI_TOKEN_LIMIT
+    
+    # Check for Kimi errors related to token limits
+    if isinstance(e, KimiError):
+        if "token" in error_str or "too long" in error_str or e.error_code == 413:
+            return ERROR_KIMI_TOKEN_LIMIT
     
     # Check for whisper-related errors
     if "whisper" in error_str:
