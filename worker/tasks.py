@@ -242,35 +242,80 @@ def _transcribe_with_whisper(audio_file_path: str) -> str | None:
     Raises:
         Exception: If transcription fails
     """
+    response = None
     try:
         with open(audio_file_path, "rb") as audio_file:
-            files = {"audio_file": (Path(audio_file_path).name, audio_file)}
-            data = {"language": "auto"}
+            file_content = audio_file.read()
             
-            response = httpx.post(
-                WHISPER_URL,
-                files=files,
-                data=data,
-                timeout=300.0,  # 5 minutes timeout for long audio
-            )
-            response.raise_for_status()
-            result = response.json()
-            
-            transcript = result.get("text", "").strip()
-            return transcript if transcript else None
+        # Determine MIME type based on file extension
+        file_ext = Path(audio_file_path).suffix.lower()
+        mime_types = {
+            '.oga': 'audio/ogg',
+            '.ogg': 'audio/ogg',
+            '.mp3': 'audio/mpeg',
+            '.m4a': 'audio/mp4',
+            '.wav': 'audio/wav',
+            '.webm': 'audio/webm',
+        }
+        mime_type = mime_types.get(file_ext, 'audio/ogg')
+        
+        files = {"audio_file": (Path(audio_file_path).name, file_content, mime_type)}
+        data = {"language": "auto"}
+        
+        logger.debug(
+            "Sending to Whisper",
+            url=WHISPER_URL,
+            file_size=len(file_content),
+            mime_type=mime_type,
+        )
+        
+        response = httpx.post(
+            WHISPER_URL,
+            files=files,
+            data=data,
+            timeout=300.0,  # 5 minutes timeout for long audio
+        )
+        
+        logger.debug(
+            "Whisper response received",
+            status_code=response.status_code,
+            content_type=response.headers.get('content-type'),
+            response_preview=response.text[:200] if response.text else "(empty)",
+        )
+        
+        response.raise_for_status()
+        
+        # Whisper returns plain text, not JSON
+        transcript = response.text.strip()
+        logger.info("Whisper transcription successful", transcript_length=len(transcript))
+        return transcript if transcript else None
             
     except httpx.HTTPStatusError as e:
         logger.error(
             "Whisper HTTP error",
             status_code=e.response.status_code,
-            response=e.response.text,
+            response=e.response.text[:500],
         )
         raise Exception(f"Whisper transcription failed: HTTP {e.response.status_code}")
     except httpx.TimeoutException:
         logger.error("Whisper request timed out")
         raise Exception("Whisper transcription timed out")
     except Exception as e:
-        logger.error("Whisper transcription error", error=str(e))
+        # Capture response text for debugging
+        response_text = ""
+        if response is not None:
+            try:
+                response_text = response.text[:500]
+            except:
+                pass
+        logger.error(
+            "Whisper transcription error",
+            error=str(e),
+            error_type=type(e).__name__,
+            response_preview=response_text or "(no response)",
+            audio_file=audio_file_path,
+            file_size=os.path.getsize(audio_file_path) if os.path.exists(audio_file_path) else 0,
+        )
         raise Exception(f"Whisper transcription failed: {e}")
 
 

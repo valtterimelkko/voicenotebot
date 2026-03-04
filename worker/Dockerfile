@@ -14,6 +14,9 @@ COPY shared/ /app/shared/
 # Copy worker code
 COPY worker/ /app/worker/
 
+# Copy root-level tasks module for RQ imports
+COPY tasks.py /app/tasks.py
+
 # Install Python dependencies
 COPY worker/requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
