@@ -72,6 +72,7 @@ def enqueue_transcription_job(
             file_id=file_id,
             chat_id=chat_id,
             message_id=message_id,
+            job_timeout=600,  # 10 minutes for long voice notes
         )
         logger.info(
             "transcription_job_enqueued",

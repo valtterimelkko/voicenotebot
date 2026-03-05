@@ -273,7 +273,7 @@ def _transcribe_with_whisper(audio_file_path: str) -> str | None:
             WHISPER_URL,
             files=files,
             data=data,
-            timeout=300.0,  # 5 minutes timeout for long audio
+            timeout=600.0,  # 10 minutes timeout for 5-minute voice notes
         )
         
         logger.debug(

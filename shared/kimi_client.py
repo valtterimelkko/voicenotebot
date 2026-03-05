@@ -69,7 +69,7 @@ class KimiClient:
         
         self.base_url = "https://api.kimi.com/coding/v1"
         self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(120.0, connect=30.0),
+            timeout=httpx.Timeout(300.0, connect=30.0),  # 5 min for long transcripts
             follow_redirects=True,
         )
         logger.info("kimi_client_initialized")
