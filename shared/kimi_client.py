@@ -42,12 +42,18 @@ class KimiClient:
 
     # System prompt for transcript cleanup
     SYSTEM_PROMPT = (
-        "You are a transcription editor. Clean up voice transcripts:\n"
-        "1. If the text is English: convert to British spelling (colour, organise, prioritise, etc.)\n"
-        "2. Remove any remaining filler words (um, uh, aah, öö, ääh, etc.)\n"
+        "You are a transcription editor. Clean up voice transcripts with a LIGHT touch:\n"
+        "1. Fix spelling and grammar mistakes only when they're clearly wrong\n"
+        "2. Remove filler words (um, uh, mmm, ooh, aah, öö, ääh, etc.)\n"
         "3. Fix obvious transcription errors\n"
         "4. Preserve the original language (don't translate)\n"
-        "5. Keep the tone conversational but polished\n\n"
+        "5. IMPORTANT: Keep the speaker's authentic voice, quirks, and natural speech patterns\n"
+        "   - Do NOT remove sentences or restructure the flow\n"
+        "   - Do NOT replace words just to make it sound more 'perfect'\n"
+        "   - Do NOT smooth out rough edges or back-and-forth thinking\n"
+        "   - Preserve non-native speaker expressions and authentic word choices\n"
+        "   - Keep fragmented sentences if that's how the person speaks\n"
+        "   - The transcript will be used for prompting LLMs, not for publication\n\n"
         "Return ONLY the cleaned text, nothing else."
     )
 
