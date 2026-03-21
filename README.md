@@ -58,6 +58,13 @@ A robust, queue-based Telegram voice-to-text transcription bot using FastAPI, RQ
 | **Kimi API** | `api.kimi.com` | Remote LLM for transcript cleanup |
 | **Telegram** | `api.telegram.org` | Telegram Bot API |
 
+### Whisper Concurrency Control
+
+To prevent performance degradation, Whisper access is controlled via **Redis distributed locks**:
+- Only **1 worker** can use Whisper at a time
+- Additional workers wait with exponential backoff
+- Prevents 10-20x slowdown from CPU contention
+
 ## Whisper Service Details
 
 The local Whisper service is located at `/root/whisper/` and runs as a separate Docker container.
@@ -119,9 +126,33 @@ docker logs -f voicenotebot-redis
 | `webhook_processed_successfully` | INFO | Voice message received and queued |
 | `transcription_job_enqueued` | INFO | Job added to Redis queue |
 | `Whisper transcription successful` | INFO | ASR completed |
+| `Whisper transcription complete - RAW OUTPUT` | INFO | **Full Whisper output for debugging** |
+| `Kimi cleanup complete - RAW OUTPUT` | INFO | **Full Kimi output for comparison** |
 | `transcript_cleaned` | INFO | Kimi cleanup completed |
 | `Voice note transcription complete` | INFO | Full pipeline succeeded |
 | `Whisper transcription error` | ERROR | ASR failed with details |
+| `Waiting for Whisper lock` | INFO | Worker waiting for Whisper access |
+| `Whisper lock acquired` | INFO | Worker obtained exclusive Whisper access |
+
+### Debug Logging for Gibberish Issues
+
+To diagnose transcription quality issues, the worker now logs **raw output** from both services:
+
+```bash
+# View raw Whisper vs Kimi output
+docker logs voicenotebot-worker-1 | grep "RAW OUTPUT"
+
+# Check for differences between Whisper and Kimi
+docker logs voicenotebot-worker-1 | grep "was_modified"
+
+# Monitor lock acquisition
+docker logs voicenotebot-worker-1 | grep -E "(lock|waiting)"
+```
+
+Each log entry includes:
+- `transcript_preview`: First 500 chars of output
+- `transcript_hash`: Hash for easy comparison
+- `was_modified`: Whether Kimi changed the Whisper output
 
 ## Quick Start
 
@@ -245,6 +276,8 @@ docker logs voicenotebot-webhook --tail 50
 |-------|----------|
 | Worker can't find tasks | Check `tasks.py` exists at root, rebuild workers |
 | Whisper returns empty | Verify MIME type is set (audio/ogg for .oga files) |
+| **Transcription is gibberish/wrong language** | Check `RAW OUTPUT` logs to see if issue is Whisper or Kimi |
+| **Slow transcription (5+ minutes)** | Check `Waiting for Whisper lock` - may be queued behind another job |
 | Kimi API errors | Check API key, verify token limits |
 | Queue growing | Check worker logs for errors, ensure 2 workers running |
 | Webhook 404 | Verify Caddy config, check webhook URL |
@@ -346,8 +379,10 @@ docker compose up -d
 
 - `.env` file contains secrets and is **gitignored**
 - Redis is not exposed externally (no port mapping)
+- **Webhook binds to localhost only** (`127.0.0.1:9999`) - prevents external scanner access
 - Webhook uses HTTPS via Caddy reverse proxy
 - Workers have memory limits to prevent OOM crashes
+- Docker log rotation configured (10MB × 5 files max)
 
 ## License
 
