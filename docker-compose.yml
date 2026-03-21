@@ -20,7 +20,7 @@ services:
       dockerfile: webhook/Dockerfile
     container_name: voicenotebot-webhook
     ports:
-      - "9999:8000"
+      - "127.0.0.1:9999:8000"  # 🔒 LOCALHOST ONLY - prevents scanner noise
     env_file:
       - .env
     environment:
@@ -39,6 +39,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+    # Add log rotation
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   worker:
     build:
@@ -49,6 +55,7 @@ services:
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - WHISPER_URL=${WHISPER_URL:-http://whisper:8000}
+      - WHISPER_CONCURRENCY=1  # 🔧 Limit to 1 concurrent Whisper job per worker
     depends_on:
       redis:
         condition: service_healthy
@@ -63,6 +70,12 @@ services:
     networks:
       - default
       - whisper_network
+    # Add log rotation
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
 
 networks:
   default:

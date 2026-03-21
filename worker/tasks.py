@@ -9,9 +9,11 @@ import asyncio
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import httpx
+import redis
 import structlog
 
 # Add parent directory to path for shared imports
@@ -27,6 +29,118 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 WHISPER_URL = os.getenv("WHISPER_URL", "http://whisper:9000/asr")
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "20"))
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+
+# Redis for distributed locking
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+WHISPER_LOCK_TIMEOUT = int(os.getenv("WHISPER_LOCK_TIMEOUT", "300"))  # 5 minutes max
+WHISPER_LOCK_RETRY_DELAY = float(os.getenv("WHISPER_LOCK_RETRY_DELAY", "5"))  # 5 seconds between retries
+
+# Initialize Redis client for locking
+try:
+    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+    redis_client.ping()  # Test connection
+    logger.info("Redis lock client connected")
+except Exception as e:
+    logger.warning("Redis lock client not available, using fallback", error=str(e))
+    redis_client = None
+
+
+class WhisperLock:
+    """Distributed lock for Whisper to prevent concurrent transcription."""
+    
+    LOCK_KEY = "whisper:transcription:lock"
+    
+    def __init__(self, timeout: int = WHISPER_LOCK_TIMEOUT):
+        self.timeout = timeout
+        self.lock_value = None
+        self.acquired = False
+    
+    def acquire(self) -> bool:
+        """Try to acquire the Whisper lock."""
+        if redis_client is None:
+            # Fallback: no locking if Redis unavailable
+            return True
+        
+        import uuid
+        self.lock_value = str(uuid.uuid4())
+        
+        # Try to set lock with NX (only if not exists)
+        acquired = redis_client.set(
+            self.LOCK_KEY, 
+            self.lock_value, 
+            nx=True, 
+            ex=self.timeout
+        )
+        
+        if acquired:
+            self.acquired = True
+            logger.debug("Whisper lock acquired")
+        
+        return acquired
+    
+    def release(self):
+        """Release the Whisper lock."""
+        if not self.acquired or redis_client is None:
+            return
+        
+        # Only release if we own the lock (check value matches)
+        current_value = redis_client.get(self.LOCK_KEY)
+        if current_value == self.lock_value:
+            redis_client.delete(self.LOCK_KEY)
+            self.acquired = False
+            logger.debug("Whisper lock released")
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+
+
+def _acquire_whisper_lock_with_retry(max_wait: int = 600) -> WhisperLock:
+    """
+    Acquire Whisper lock with retry logic.
+    
+    Args:
+        max_wait: Maximum seconds to wait for lock (default 10 min)
+        
+    Returns:
+        WhisperLock instance (acquired or not based on Redis availability)
+    """
+    lock = WhisperLock()
+    start_time = time.time()
+    attempts = 0
+    
+    while not lock.acquire():
+        attempts += 1
+        elapsed = time.time() - start_time
+        
+        if elapsed >= max_wait:
+            logger.error(
+                "Could not acquire Whisper lock within timeout",
+                elapsed_seconds=elapsed,
+                attempts=attempts,
+            )
+            # Return unlocked lock as fallback (let it try anyway)
+            return lock
+        
+        if attempts == 1 or attempts % 10 == 0:
+            logger.info(
+                "Waiting for Whisper lock",
+                elapsed_seconds=int(elapsed),
+                attempts=attempts,
+            )
+        
+        time.sleep(WHISPER_LOCK_RETRY_DELAY)
+    
+    if attempts > 0:
+        logger.info(
+            "Whisper lock acquired after waiting",
+            wait_seconds=time.time() - start_time,
+            attempts=attempts,
+        )
+    
+    return lock
 
 # Error messages
 ERROR_FILE_TOO_LARGE = (
@@ -147,9 +261,13 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
             _run_async(telegram_client.send_message(chat_id=chat_id, text=ERROR_WHISPER_FAILED))
             return {"success": False, "error": "whisper_empty_transcript"}
         
-        logger.debug(
-            "Whisper transcription complete",
+        # 🔍 CRITICAL DEBUG: Log full Whisper output to diagnose gibberish issues
+        # This logs the first 500 chars so we can compare Whisper vs Kimi output
+        logger.info(
+            "Whisper transcription complete - RAW OUTPUT",
             transcript_length=len(transcript),
+            transcript_preview=transcript[:500] if len(transcript) > 500 else transcript,
+            transcript_hash=hash(transcript) & 0xFFFFFFFF,  # For easy comparison
         )
         
         # Step 5: Clean up with Kimi API
@@ -168,7 +286,14 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
             logger.warning("Kimi cleanup returned empty, using raw transcript")
             cleaned_text = transcript
         
-        logger.debug("Kimi cleanup complete", cleaned_length=len(cleaned_text))
+        # 🔍 Log Kimi output for comparison with Whisper
+        logger.info(
+            "Kimi cleanup complete - RAW OUTPUT",
+            cleaned_length=len(cleaned_text),
+            cleaned_preview=cleaned_text[:500] if len(cleaned_text) > 500 else cleaned_text,
+            cleaned_hash=hash(cleaned_text) & 0xFFFFFFFF,
+            was_modified=cleaned_text.strip() != transcript.strip(),
+        )
         
         # Step 6: Send result to user
         logger.debug("Sending transcription to user")
@@ -178,6 +303,8 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
             "Voice note transcription complete",
             transcript_length=len(transcript),
             cleaned_length=len(cleaned_text),
+            whisper_preview=transcript[:200] if len(transcript) > 200 else transcript,
+            kimi_preview=cleaned_text[:200] if len(cleaned_text) > 200 else cleaned_text,
         )
         
         return {
@@ -233,6 +360,9 @@ def _transcribe_with_whisper(audio_file_path: str) -> str | None:
     """
     Send audio file to Whisper service for transcription.
     
+    Uses distributed locking to prevent concurrent Whisper access,
+    which causes severe performance degradation on CPU.
+    
     Args:
         audio_file_path: Path to audio file
         
@@ -243,52 +373,66 @@ def _transcribe_with_whisper(audio_file_path: str) -> str | None:
         Exception: If transcription fails
     """
     response = None
+    
+    # Acquire distributed lock to prevent concurrent Whisper access
+    # This is critical: concurrent requests to Whisper on CPU cause 10-20x slowdown
+    lock = _acquire_whisper_lock_with_retry()
+    
     try:
-        with open(audio_file_path, "rb") as audio_file:
-            file_content = audio_file.read()
+        with lock:
+            start_time = time.time()
             
-        # Determine MIME type based on file extension
-        file_ext = Path(audio_file_path).suffix.lower()
-        mime_types = {
-            '.oga': 'audio/ogg',
-            '.ogg': 'audio/ogg',
-            '.mp3': 'audio/mpeg',
-            '.m4a': 'audio/mp4',
-            '.wav': 'audio/wav',
-            '.webm': 'audio/webm',
-        }
-        mime_type = mime_types.get(file_ext, 'audio/ogg')
-        
-        files = {"audio_file": (Path(audio_file_path).name, file_content, mime_type)}
-        data = {"language": "auto"}
-        
-        logger.debug(
-            "Sending to Whisper",
-            url=WHISPER_URL,
-            file_size=len(file_content),
-            mime_type=mime_type,
-        )
-        
-        response = httpx.post(
-            WHISPER_URL,
-            files=files,
-            data=data,
-            timeout=600.0,  # 10 minutes timeout for 5-minute voice notes
-        )
-        
-        logger.debug(
-            "Whisper response received",
-            status_code=response.status_code,
-            content_type=response.headers.get('content-type'),
-            response_preview=response.text[:200] if response.text else "(empty)",
-        )
-        
-        response.raise_for_status()
-        
-        # Whisper returns plain text, not JSON
-        transcript = response.text.strip()
-        logger.info("Whisper transcription successful", transcript_length=len(transcript))
-        return transcript if transcript else None
+            with open(audio_file_path, "rb") as audio_file:
+                file_content = audio_file.read()
+                
+            # Determine MIME type based on file extension
+            file_ext = Path(audio_file_path).suffix.lower()
+            mime_types = {
+                '.oga': 'audio/ogg',
+                '.ogg': 'audio/ogg',
+                '.mp3': 'audio/mpeg',
+                '.m4a': 'audio/mp4',
+                '.wav': 'audio/wav',
+                '.webm': 'audio/webm',
+            }
+            mime_type = mime_types.get(file_ext, 'audio/ogg')
+            
+            files = {"audio_file": (Path(audio_file_path).name, file_content, mime_type)}
+            data = {"language": "auto"}
+            
+            logger.debug(
+                "Sending to Whisper",
+                url=WHISPER_URL,
+                file_size=len(file_content),
+                mime_type=mime_type,
+            )
+            
+            response = httpx.post(
+                WHISPER_URL,
+                files=files,
+                data=data,
+                timeout=300.0,  # 5 minutes timeout (reduced from 10 since we have locking)
+            )
+            
+            elapsed = time.time() - start_time
+            logger.debug(
+                "Whisper response received",
+                status_code=response.status_code,
+                content_type=response.headers.get('content-type'),
+                response_preview=response.text[:200] if response.text else "(empty)",
+                elapsed_seconds=round(elapsed, 2),
+            )
+            
+            response.raise_for_status()
+            
+            # Whisper returns plain text, not JSON
+            transcript = response.text.strip()
+            logger.info(
+                "Whisper transcription successful", 
+                transcript_length=len(transcript),
+                elapsed_seconds=round(elapsed, 2),
+            )
+            return transcript if transcript else None
             
     except httpx.HTTPStatusError as e:
         logger.error(
