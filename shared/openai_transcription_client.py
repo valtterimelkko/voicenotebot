@@ -1,6 +1,8 @@
 """OpenAI API client for audio transcription."""
 
 import os
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +74,77 @@ class OpenAITranscriptionClient:
             "Authorization": f"Bearer {self.api_key}",
         }
 
+    def _convert_to_wav(self, audio_file_path: str) -> str:
+        """Convert audio to WAV format using ffmpeg.
+
+        OpenAI does not support .oga (Ogg Audio) files that Telegram sends.
+        This converts them to .wav which is universally supported.
+
+        Args:
+            audio_file_path: Original audio file path.
+
+        Returns:
+            Path to converted WAV file (caller must clean up).
+
+        Raises:
+            OpenAITranscriptionError: If ffmpeg conversion fails.
+        """
+        file_ext = Path(audio_file_path).suffix.lower()
+        supported = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm"}
+
+        if file_ext in supported:
+            return audio_file_path
+
+        # Need conversion
+        logger.info(
+            "converting_audio_for_openai",
+            original_file=audio_file_path,
+            original_format=file_ext,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            output_path = tmp.name
+
+        try:
+            result = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",  # Overwrite output
+                    "-i", audio_file_path,
+                    "-ar", "16000",  # 16kHz sample rate (optimal for Whisper)
+                    "-ac", "1",      # Mono channel
+                    "-c:a", "pcm_s16le",  # 16-bit PCM
+                    output_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,
+            )
+            logger.info(
+                "audio_conversion_complete",
+                output_file=output_path,
+                original_format=file_ext,
+            )
+            return output_path
+        except subprocess.CalledProcessError as e:
+            logger.error(
+                "ffmpeg_conversion_failed",
+                error=e.stderr,
+                returncode=e.returncode,
+            )
+            # Clean up failed output
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            raise OpenAITranscriptionError(
+                f"Failed to convert audio to WAV: {e.stderr}"
+            )
+        except FileNotFoundError:
+            logger.error("ffmpeg_not_found")
+            raise OpenAITranscriptionError(
+                "ffmpeg not found. Required to convert .oga files for OpenAI."
+            )
+
     def transcribe(self, audio_file_path: str, language: str = "en") -> str:
         """Transcribe an audio file using OpenAI API.
 
@@ -92,25 +165,30 @@ class OpenAITranscriptionClient:
             language=language,
         )
 
-        url = f"{self.BASE_URL}/audio/transcriptions"
-
-        # Determine MIME type based on file extension
-        file_ext = Path(audio_file_path).suffix.lower()
-        mime_types = {
-            ".oga": "audio/ogg",
-            ".ogg": "audio/ogg",
-            ".mp3": "audio/mpeg",
-            ".m4a": "audio/mp4",
-            ".wav": "audio/wav",
-            ".webm": "audio/webm",
-            ".mp4": "audio/mp4",
-        }
-        mime_type = mime_types.get(file_ext, "audio/ogg")
-
+        # Convert to supported format if needed
+        converted_path = None
         try:
-            with open(audio_file_path, "rb") as audio_file:
+            converted_path = self._convert_to_wav(audio_file_path)
+            file_to_upload = converted_path
+
+            url = f"{self.BASE_URL}/audio/transcriptions"
+
+            # Determine MIME type based on file extension
+            file_ext = Path(file_to_upload).suffix.lower()
+            mime_types = {
+                ".oga": "audio/ogg",
+                ".ogg": "audio/ogg",
+                ".mp3": "audio/mpeg",
+                ".m4a": "audio/mp4",
+                ".wav": "audio/wav",
+                ".webm": "audio/webm",
+                ".mp4": "audio/mp4",
+            }
+            mime_type = mime_types.get(file_ext, "audio/wav")
+
+            with open(file_to_upload, "rb") as audio_file:
                 files = {
-                    "file": (Path(audio_file_path).name, audio_file, mime_type),
+                    "file": (Path(file_to_upload).name, audio_file, mime_type),
                 }
                 data = {
                     "model": self.model,
@@ -200,6 +278,15 @@ class OpenAITranscriptionClient:
         except Exception as e:
             logger.error("openai_transcription_unexpected_error", error=str(e))
             raise OpenAITranscriptionError(f"Unexpected error: {str(e)}")
+
+        finally:
+            # Clean up converted temp file if different from original
+            if converted_path and converted_path != audio_file_path and os.path.exists(converted_path):
+                try:
+                    os.remove(converted_path)
+                    logger.debug("cleaned_up_converted_audio", path=converted_path)
+                except Exception as e:
+                    logger.warning("failed_to_clean_up_converted_audio", path=converted_path, error=str(e))
 
     def close(self) -> None:
         """Close the HTTP client."""
