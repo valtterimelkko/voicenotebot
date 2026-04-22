@@ -19,7 +19,7 @@ import structlog
 # Add parent directory to path for shared imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from shared import get_logger, TelegramClient, KimiClient, KimiError
+from shared import get_logger, TelegramClient, KimiClient, KimiError, OpenAITranscriptionClient, OpenAITranscriptionError
 
 # Configure logging
 logger = get_logger(__name__)
@@ -27,6 +27,8 @@ logger = get_logger(__name__)
 # Environment configuration
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 WHISPER_URL = os.getenv("WHISPER_URL", "http://whisper:9000/asr")
+TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER", "openai").lower()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "20"))
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
@@ -252,22 +254,56 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
             _run_async(telegram_client.send_message(chat_id=chat_id, text=ERROR_FILE_TOO_LARGE))
             return {"success": False, "error": "file_too_large"}
         
-        # Step 4: Transcribe with Whisper
-        logger.debug("Sending to Whisper for transcription")
-        transcript = _transcribe_with_whisper(temp_file_path)
-        
+        # Step 4: Transcribe (OpenAI primary, Whisper fallback)
+        transcript = None
+        transcription_source = None
+
+        # Try OpenAI first if configured
+        if TRANSCRIPTION_PROVIDER == "openai" and OPENAI_API_KEY:
+            try:
+                logger.debug("Sending to OpenAI for transcription")
+                openai_client = OpenAITranscriptionClient()
+                transcript = openai_client.transcribe(temp_file_path)
+                transcription_source = "openai"
+                logger.info(
+                    "OpenAI transcription successful",
+                    transcript_length=len(transcript),
+                )
+            except OpenAITranscriptionError as e:
+                logger.warning(
+                    "OpenAI transcription failed, will fallback to Whisper",
+                    error=str(e),
+                    error_code=e.error_code,
+                )
+            except Exception as e:
+                logger.warning(
+                    "OpenAI transcription failed unexpectedly, will fallback to Whisper",
+                    error=str(e),
+                )
+            finally:
+                try:
+                    openai_client.close()
+                except Exception:
+                    pass
+
+        # Fallback to Whisper if OpenAI failed or not configured
         if not transcript:
-            logger.error("Whisper transcription returned empty")
+            logger.debug("Sending to Whisper for transcription")
+            transcript = _transcribe_with_whisper(temp_file_path)
+            transcription_source = "whisper"
+
+        if not transcript:
+            logger.error("Transcription returned empty from all providers")
             _run_async(telegram_client.send_message(chat_id=chat_id, text=ERROR_WHISPER_FAILED))
-            return {"success": False, "error": "whisper_empty_transcript"}
-        
-        # 🔍 CRITICAL DEBUG: Log full Whisper output to diagnose gibberish issues
-        # This logs the first 500 chars so we can compare Whisper vs Kimi output
+            return {"success": False, "error": "transcription_empty"}
+
+        # 🔍 CRITICAL DEBUG: Log full transcription output to diagnose gibberish issues
         logger.info(
-            "Whisper transcription complete - RAW OUTPUT",
+            "Transcription complete - RAW OUTPUT",
+            provider=transcription_source,
             transcript_length=len(transcript),
             transcript_preview=transcript[:500] if len(transcript) > 500 else transcript,
-            transcript_hash=hash(transcript) & 0xFFFFFFFF,  # For easy comparison
+            transcript_hash=hash(transcript) & 0xFFFFFFFF,
         )
         
         # Step 5: Clean up with Kimi API
@@ -301,14 +337,16 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
         
         logger.info(
             "Voice note transcription complete",
+            provider=transcription_source,
             transcript_length=len(transcript),
             cleaned_length=len(cleaned_text),
-            whisper_preview=transcript[:200] if len(transcript) > 200 else transcript,
+            raw_preview=transcript[:200] if len(transcript) > 200 else transcript,
             kimi_preview=cleaned_text[:200] if len(cleaned_text) > 200 else cleaned_text,
         )
-        
+
         return {
             "success": True,
+            "provider": transcription_source,
             "transcript_length": len(transcript),
             "cleaned_length": len(cleaned_text),
         }
