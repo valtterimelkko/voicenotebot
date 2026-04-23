@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BACKEND_DIR="/root/voicenotebot/streaming-dictation/backend"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SD_DIR="$(dirname "$SCRIPT_DIR")"
+BACKEND_DIR="$SD_DIR/backend"
+FRONTEND_DIR="$SD_DIR/frontend"
 SERVICE_NAME="streaming-dictation"
 
 cd "$BACKEND_DIR"
@@ -13,11 +16,20 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-echo "Installing dependencies..."
+echo "Installing backend dependencies..."
 npm install --production=false
 
-echo "Building TypeScript..."
+echo "Building TypeScript backend..."
 npm run build
+
+echo "Installing frontend dependencies..."
+cd "$FRONTEND_DIR"
+npm install
+
+echo "Building frontend..."
+npm run build
+
+cd "$BACKEND_DIR"
 
 echo "Restarting $SERVICE_NAME service..."
 systemctl restart "$SERVICE_NAME"
