@@ -1,19 +1,105 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
+import { v4 as uuidv4 } from 'uuid';
 import { DB } from '../db';
+import { transcribeWithFallback } from '../services/stt';
+import { cleanupTranscript } from '../services/cleanup';
+
+interface ActiveRecording {
+  chunks: Buffer[];
+  startedAt: number;
+}
+
+const activeRecordings = new Map<string, ActiveRecording>();
+
+interface SettingsRow {
+  default_cleanup_model: string;
+  retention_days: number;
+}
 
 export function recordingsRouter(db: DB): Router {
   const router = Router();
 
-  router.post('/start', (_req, res) => {
-    res.status(501).json({ message: 'not implemented' });
+  router.post('/start', (_req: Request, res: Response) => {
+    const id = uuidv4();
+    activeRecordings.set(id, { chunks: [], startedAt: Date.now() });
+    res.json({ id });
   });
 
-  router.post('/:id/stream', (_req, res) => {
-    res.status(501).json({ message: 'not implemented' });
+  router.post('/:id/stream', (req: Request, res: Response) => {
+    const recording = activeRecordings.get(req.params.id);
+    if (!recording) {
+      return res.status(404).json({ error: 'Recording session not found' });
+    }
+    const chunk = req.body as Buffer;
+    if (!Buffer.isBuffer(chunk) || chunk.length === 0) {
+      return res.status(400).json({ error: 'Empty or invalid audio chunk' });
+    }
+    recording.chunks.push(chunk);
+    res.json({ ok: true });
   });
 
-  router.post('/:id/finish', (_req, res) => {
-    res.status(501).json({ message: 'not implemented' });
+  router.post('/:id/finish', async (req: Request, res: Response) => {
+    const recording = activeRecordings.get(req.params.id);
+    if (!recording) {
+      return res.status(404).json({ error: 'Recording session not found' });
+    }
+
+    activeRecordings.delete(req.params.id);
+
+    const durationMs = Date.now() - recording.startedAt;
+
+    let rawText = '';
+    let sttModel = '';
+    let usedFallback = 0;
+
+    try {
+      const sttResult = await transcribeWithFallback(recording.chunks);
+      rawText = sttResult.text;
+      sttModel = sttResult.model;
+      usedFallback = sttResult.usedFallback ? 1 : 0;
+    } catch {
+      rawText = '';
+    }
+
+    const settings = db.prepare(
+      'SELECT default_cleanup_model, retention_days FROM user_settings WHERE id = 1'
+    ).get() as SettingsRow;
+
+    const cleanupModel = settings.default_cleanup_model as 'kimi' | 'gpt-5-nano';
+    const retentionDays = settings.retention_days;
+
+    let cleanedText = rawText;
+    if (rawText) {
+      try {
+        const cleanupResult = await cleanupTranscript(rawText, cleanupModel);
+        cleanedText = cleanupResult.cleanedText;
+      } catch {
+        cleanedText = rawText;
+      }
+    }
+
+    const previewText = cleanedText.slice(0, 200);
+
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + retentionDays);
+
+    db.prepare(`
+      INSERT INTO transcripts (id, preview_text, raw_text, cleaned_text, cleanup_model, stt_model, used_fallback, duration_ms, expires_at, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed')
+    `).run(
+      req.params.id,
+      previewText,
+      rawText,
+      cleanedText,
+      cleanupModel,
+      sttModel,
+      usedFallback,
+      durationMs,
+      expiresAt.toISOString()
+    );
+
+    const transcript = db.prepare('SELECT * FROM transcripts WHERE id = ?').get(req.params.id);
+    res.json(transcript);
   });
 
   return router;

@@ -1,7 +1,7 @@
-export async function login(password: string): Promise<boolean> {
-  throw new Error('not implemented');
-}
+import bcrypt from 'bcrypt';
+import { config } from '../config';
 
-export async function logout(sessionId: string): Promise<void> {
-  throw new Error('not implemented');
+export async function verifyPassword(password: string): Promise<boolean> {
+  if (!config.passwordHash) return false;
+  return bcrypt.compare(password, config.passwordHash);
 }
