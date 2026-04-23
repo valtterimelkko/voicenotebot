@@ -104,3 +104,4 @@ node_modules/
 
 # Local development files
 .docker-compose.override.yml
+streaming-dictation/frontend/dist/
