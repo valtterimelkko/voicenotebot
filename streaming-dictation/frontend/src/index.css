@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Ensure min-h-dvh works everywhere */
+:root {
+  --vh: 1vh;
+}
