@@ -1,5 +1,14 @@
 # VoiceNote Bot
 
+This repository contains two related voice-to-text systems:
+
+1. **Legacy Telegram Bot** — Queue-based Telegram bot using FastAPI + RQ + local Whisper + Kimi cleanup. See [documentation below](#architecture).
+2. **Streaming Dictation** — Browser-based voice dictation web app using Node.js + Express + SQLite + OpenAI STT + Kimi/OpenAI cleanup. See [Streaming Dictation docs](./docs/STREAMING-DICTATION/README.md).
+
+---
+
+## Legacy Telegram Bot
+
 A robust, queue-based Telegram voice-to-text transcription bot using FastAPI, RQ (Redis Queue), OpenAI Whisper (local), and Kimi API for transcript cleanup.
 
 ## Architecture

@@ -1,0 +1,15 @@
+[Unit]
+Description=Streaming Dictation Backend
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/voicenotebot/streaming-dictation/backend
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=/root/voicenotebot/streaming-dictation/backend/.env
+
+[Install]
+WantedBy=multi-user.target
