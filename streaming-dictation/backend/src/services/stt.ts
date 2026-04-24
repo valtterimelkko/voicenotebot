@@ -1,5 +1,3 @@
-import OpenAI from 'openai';
-import { config } from '../config';
 import { getSharedOpenAIClient } from './connectionPool';
 
 const STT_MODEL = 'gpt-4o-mini-transcribe';

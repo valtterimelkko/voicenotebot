@@ -205,12 +205,10 @@ npm run build
 At the time of this documentation update:
 - backend tests pass
 - backend typecheck passes
+- backend lint passes
 - frontend tests pass
 - frontend typecheck passes
 - frontend build passes
-- backend lint currently fails because ESLint v9 expects a flat `eslint.config.*` file
-
-Treat that lint issue as a tooling/config task rather than a product runtime failure.
 
 ## File Structure
 

@@ -40,7 +40,7 @@ Implemented today:
 Recent checks run against the current repo state:
 - `streaming-dictation/backend`: `npm test` ✅, `npm run typecheck` ✅
 - `streaming-dictation/frontend`: `npm test` ✅, `npm run typecheck` ✅, `npm run build` ✅
-- `streaming-dictation/backend`: `npm run lint` currently **fails** because ESLint v9 expects a flat `eslint.config.*` file
+- `streaming-dictation/backend`: `npm run lint` ✅
 
 ### Legacy Telegram Bot
 

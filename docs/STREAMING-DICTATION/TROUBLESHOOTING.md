@@ -247,7 +247,13 @@ bash /root/voicenotebot/streaming-dictation/scripts/deploy.sh
 
 **Symptom**: `npm run lint` fails in `streaming-dictation/backend`.
 
-**Current known cause**:
-ESLint v9 expects a flat `eslint.config.*` file, but the backend lint setup has not yet been updated accordingly.
+**Current note**:
+The backend now uses an ESLint flat config. If lint fails again, check that dependencies were installed with dev dependencies included:
 
-This is a tooling configuration issue, not a runtime failure in the dictation product itself.
+```bash
+cd /root/voicenotebot/streaming-dictation/backend
+npm install --include=dev
+npm run lint
+```
+
+If the config file is missing, verify `eslint.config.mjs` exists in the backend directory.
