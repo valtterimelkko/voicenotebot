@@ -1,5 +1,5 @@
-import OpenAI from 'openai';
 import { config } from '../config';
+import { getSharedOpenAIClient } from './connectionPool';
 
 const KIMI_ENDPOINT = 'https://api.kimi.com/coding/v1/chat/completions';
 const KIMI_MODEL = 'kimi-for-coding';
@@ -63,7 +63,7 @@ async function cleanupWithKimi(transcriptText: string): Promise<CleanupResult> {
 }
 
 async function cleanupWithOpenAI(transcriptText: string): Promise<CleanupResult> {
-  const client = new OpenAI({ apiKey: config.openaiApiKey });
+  const client = getSharedOpenAIClient();
 
   const response = await client.chat.completions.create({
     model: OPENAI_CLEANUP_MODEL,

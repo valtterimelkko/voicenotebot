@@ -41,6 +41,7 @@ export const api = {
   logout: () => apiFetch('/auth/logout', { method: 'POST' }) as Promise<{ ok: boolean }>,
 
   // Recordings
+  warmup: () => apiFetch('/api/recordings/warmup', { method: 'POST' }) as Promise<{ ok: boolean }>,
   startRecording: () => apiFetch('/api/recordings/start', { method: 'POST' }) as Promise<{ id: string }>,
   streamChunk: (id: string, chunk: ArrayBuffer) =>
     fetch(`/api/recordings/${id}/stream`, {

@@ -7,6 +7,7 @@ import { recordingsRouter } from '../src/routes/recordings';
 import { transcriptsRouter } from '../src/routes/transcripts';
 import { settingsRouter } from '../src/routes/settings';
 import { requireAuth } from '../src/middleware/auth';
+import { resetForTesting } from '../src/services/connectionPool';
 import request from 'supertest';
 
 vi.mock('../src/services/stt', () => ({
@@ -15,6 +16,16 @@ vi.mock('../src/services/stt', () => ({
     model: 'gpt-4o-mini-transcribe',
     usedFallback: false,
   }),
+  startSpeculativeTranscription: vi.fn().mockReturnValue({
+    promise: Promise.resolve({
+      text: 'Hello world speculative transcription',
+      model: 'gpt-4o-mini-transcribe',
+      usedFallback: false,
+    }),
+    chunkCount: 3,
+    startedAt: Date.now(),
+  }),
+  shouldUseSpeculative: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../src/services/cleanup', () => ({
@@ -37,6 +48,7 @@ describe('E2E: full login → recording → transcript → search → copy flow'
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetForTesting();
     mockedTranscribe.mockResolvedValue({
       text: 'Hello world this is a test transcription about important things',
       model: 'gpt-4o-mini-transcribe',
@@ -120,6 +132,19 @@ describe('E2E: full login → recording → transcript → search → copy flow'
     expect(getSettingsRes.status).toBe(200);
     expect(getSettingsRes.body.default_cleanup_model).toBe('gpt-5-nano');
     expect(getSettingsRes.body.retention_days).toBe(14);
+  });
+
+  it('warmup endpoint returns ok when authenticated', async () => {
+    await agent.post('/auth/login').send({ password: 'testpassword' });
+
+    const res = await agent.post('/api/recordings/warmup');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  it('warmup endpoint requires authentication', async () => {
+    const res = await request(app).post('/api/recordings/warmup');
+    expect(res.status).toBe(401);
   });
 
   it('rejects unauthenticated access to protected routes', async () => {

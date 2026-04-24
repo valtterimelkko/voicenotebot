@@ -1,15 +1,19 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { DB } from '../db';
-import { transcribeWithFallback } from '../services/stt';
+import { transcribeWithFallback, startSpeculativeTranscription, shouldUseSpeculative, type SpeculativeResult } from '../services/stt';
 import { cleanupTranscript } from '../services/cleanup';
+import { warmupConnections } from '../services/connectionPool';
 
 interface ActiveRecording {
   chunks: Buffer[];
   startedAt: number;
+  speculative: SpeculativeResult | null;
 }
 
 const activeRecordings = new Map<string, ActiveRecording>();
+
+const SPECULATIVE_DELAY_MS = 3_000;
 
 interface SettingsRow {
   default_cleanup_model: string;
@@ -19,9 +23,28 @@ interface SettingsRow {
 export function recordingsRouter(db: DB): Router {
   const router = Router();
 
+  router.post('/warmup', async (_req: Request, res: Response) => {
+    await warmupConnections();
+    res.json({ ok: true });
+  });
+
   router.post('/start', (_req: Request, res: Response) => {
     const id = uuidv4();
-    activeRecordings.set(id, { chunks: [], startedAt: Date.now() });
+    const recording: ActiveRecording = {
+      chunks: [],
+      startedAt: Date.now(),
+      speculative: null,
+    };
+    activeRecordings.set(id, recording);
+
+    const specTimer = setTimeout(() => {
+      const rec = activeRecordings.get(id);
+      if (rec && rec.chunks.length > 0 && !rec.speculative) {
+        rec.speculative = startSpeculativeTranscription(rec.chunks);
+      }
+    }, SPECULATIVE_DELAY_MS);
+    specTimer.unref();
+
     res.json({ id });
   });
 
@@ -53,7 +76,16 @@ export function recordingsRouter(db: DB): Router {
     let usedFallback = 0;
 
     try {
-      const sttResult = await transcribeWithFallback(recording.chunks);
+      const hasSpeculative =
+        recording.speculative !== null &&
+        shouldUseSpeculative(recording.speculative, recording.chunks.length);
+
+      let sttResult;
+      if (hasSpeculative && recording.speculative) {
+        sttResult = await recording.speculative.promise;
+      } else {
+        sttResult = await transcribeWithFallback(recording.chunks);
+      }
       rawText = sttResult.text;
       sttModel = sttResult.model;
       usedFallback = sttResult.usedFallback ? 1 : 0;

@@ -1,11 +1,8 @@
 import OpenAI from 'openai';
 import { config } from '../config';
+import { getSharedOpenAIClient } from './connectionPool';
 
 const STT_MODEL = 'gpt-4o-mini-transcribe';
-
-function getOpenAIClient(): OpenAI {
-  return new OpenAI({ apiKey: config.openaiApiKey });
-}
 
 export interface STTResult {
   text: string;
@@ -14,7 +11,7 @@ export interface STTResult {
 }
 
 export async function streamTranscribe(audioChunks: Buffer[]): Promise<STTResult> {
-  const client = getOpenAIClient();
+  const client = getSharedOpenAIClient();
   const audioBuffer = Buffer.concat(audioChunks);
   const file = new File([audioBuffer], 'audio.webm', { type: 'audio/webm' });
 
@@ -32,7 +29,7 @@ export async function streamTranscribe(audioChunks: Buffer[]): Promise<STTResult
 }
 
 export async function batchTranscribe(audioBuffer: Buffer): Promise<STTResult> {
-  const client = getOpenAIClient();
+  const client = getSharedOpenAIClient();
   const file = new File([audioBuffer], 'audio.webm', { type: 'audio/webm' });
 
   const response = await client.audio.transcriptions.create({
@@ -56,4 +53,28 @@ export async function transcribeWithFallback(audioChunks: Buffer[]): Promise<STT
     const audioBuffer = Buffer.concat(audioChunks);
     return await batchTranscribe(audioBuffer);
   }
+}
+
+export interface SpeculativeResult {
+  promise: Promise<STTResult>;
+  chunkCount: number;
+  startedAt: number;
+}
+
+export function startSpeculativeTranscription(chunks: Buffer[]): SpeculativeResult {
+  const chunksCopy = chunks.map(c => Buffer.from(c));
+  return {
+    promise: transcribeWithFallback(chunksCopy),
+    chunkCount: chunks.length,
+    startedAt: Date.now(),
+  };
+}
+
+export function shouldUseSpeculative(
+  speculative: SpeculativeResult,
+  totalChunks: number
+): boolean {
+  if (totalChunks <= speculative.chunkCount) return true;
+  const newChunksRatio = (totalChunks - speculative.chunkCount) / totalChunks;
+  return newChunksRatio < 0.3;
 }

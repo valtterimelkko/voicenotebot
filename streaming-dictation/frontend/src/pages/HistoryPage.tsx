@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { api, type Transcript } from '../api/client'
 import { TranscriptCard } from '../components/TranscriptCard'
 import { LoadingSpinner } from '../components/LoadingSpinner'
+import { useVisibilityPolling } from '../hooks/useVisibilityPolling'
 
 export function HistoryPage() {
   const [transcripts, setTranscripts] = useState<Transcript[]>([])
@@ -9,7 +10,6 @@ export function HistoryPage() {
   const [error, setError] = useState('')
 
   const load = useCallback(async () => {
-    setLoading(true)
     setError('')
     try {
       const data = await api.listTranscripts()
@@ -23,12 +23,14 @@ export function HistoryPage() {
 
   useEffect(() => { void load() }, [load])
 
+  useVisibilityPolling(load, 10_000)
+
   return (
     <div className="px-4 py-6 max-w-2xl mx-auto space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-800">History</h2>
         <button
-          onClick={() => void load()}
+          onClick={() => { setLoading(true); void load() }}
           disabled={loading}
           className="text-sm text-blue-600 hover:text-blue-800 min-h-[44px] px-2 disabled:text-slate-400 transition-colors"
           aria-label="Refresh history"
