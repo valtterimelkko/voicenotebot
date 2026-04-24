@@ -30,14 +30,15 @@ Result:
 - typecheck passed
 - production build passed
 
-### Current tooling caveat
+### Backend lint
 
 ```bash
 cd /root/voicenotebot/streaming-dictation/backend
 npm run lint
 ```
 
-This currently fails because ESLint v9 expects a flat `eslint.config.*` file.
+Result:
+- lint passes
 
 ## Frameworks
 

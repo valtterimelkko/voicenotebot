@@ -113,4 +113,4 @@ Retention cleanup periodically deletes expired transcript rows.
 Current checked status:
 - backend tests pass
 - backend typecheck passes
-- backend lint currently fails because ESLint v9 expects a flat `eslint.config.*` file
+- backend lint passes
