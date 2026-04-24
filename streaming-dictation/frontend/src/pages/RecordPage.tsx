@@ -29,11 +29,11 @@ export function RecordPage() {
   const streamRef = useRef<MediaStream | null>(null)
   const pendingChunksRef = useRef<Promise<void>>(Promise.resolve())
 
-  // Load settings on mount
   useEffect(() => {
     api.getSettings()
       .then(s => useSettingsStore.getState().setSettings(s))
       .catch(() => { /* non-fatal */ })
+    api.warmup().catch(() => { /* non-fatal */ })
   }, [])
 
   const startRecording = useCallback(async () => {

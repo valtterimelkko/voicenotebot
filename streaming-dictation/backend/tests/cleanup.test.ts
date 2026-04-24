@@ -19,12 +19,14 @@ vi.mock('openai', () => ({
 }));
 
 import { cleanupTranscript } from '../src/services/cleanup';
+import { resetForTesting } from '../src/services/connectionPool';
 
 describe('cleanupTranscript with kimi', () => {
   beforeEach(() => {
     mockFetch.mockReset();
     config.kimiApiKey = 'test-kimi-key';
     config.openaiApiKey = 'test-openai-key';
+    resetForTesting();
   });
 
   it('calls Kimi endpoint', async () => {
@@ -122,6 +124,7 @@ describe('cleanupTranscript with gpt-5-nano', () => {
   beforeEach(() => {
     mockChatCreate.mockReset();
     config.openaiApiKey = 'test-openai-key';
+    resetForTesting();
   });
 
   it('calls OpenAI chat completions', async () => {
