@@ -1,41 +1,28 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect } from 'react'
 
 export function useVisibilityPolling(callback: () => void, intervalMs: number) {
-  const savedCallback = useRef(callback)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
   useEffect(() => {
-    savedCallback.current = callback
-  }, [callback])
+    let stopped = false
 
-  const startPolling = useCallback(() => {
-    if (timerRef.current) return
-    timerRef.current = setInterval(() => savedCallback.current(), intervalMs)
-  }, [intervalMs])
+    const id = setInterval(() => {
+      if (!stopped) callback()
+    }, intervalMs)
 
-  const stopPolling = useCallback(() => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current)
-      timerRef.current = null
-    }
-  }, [])
-
-  useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
-        savedCallback.current()
-        startPolling()
+        stopped = false
+        callback()
       } else {
-        stopPolling()
+        stopped = true
       }
     }
 
-    startPolling()
     document.addEventListener('visibilitychange', handleVisibility)
 
     return () => {
-      stopPolling()
+      stopped = true
+      clearInterval(id)
       document.removeEventListener('visibilitychange', handleVisibility)
     }
-  }, [startPolling, stopPolling])
+  }, [callback, intervalMs])
 }
