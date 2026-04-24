@@ -1,10 +1,22 @@
 # Backend — Streaming Dictation
 
-Node.js + TypeScript + Express + SQLite backend for the streaming dictation system.
+Node.js + TypeScript + Express + SQLite backend for the Streaming Dictation system.
 
 **Location:** `streaming-dictation/backend/`
 
----
+## What This Layer Owns
+
+The backend is responsible for:
+- session authentication
+- recording lifecycle endpoints
+- STT orchestration
+- cleanup model orchestration
+- transcript persistence and search
+- settings persistence
+- transcript retention cleanup
+- serving the built frontend bundle
+
+For the broader system view, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ## Stack
 
@@ -12,226 +24,93 @@ Node.js + TypeScript + Express + SQLite backend for the streaming dictation syst
 |---|---|
 | Node.js + TypeScript | Runtime and type safety |
 | Express 4 | HTTP server |
-| better-sqlite3 | SQLite database (synchronous API) |
+| better-sqlite3 | SQLite database |
 | express-session | Cookie-based session auth |
-| bcrypt | Password hashing |
-| OpenAI SDK | STT and cleanup API client |
-| uuid | Recording session IDs |
-| Vitest + supertest | Unit and integration tests |
+| bcrypt | Password verification |
+| OpenAI SDK | STT / cleanup API client |
+| uuid | Recording IDs |
+| Vitest + supertest | Tests |
 
----
-
-## Dev Commands
+## Development Commands
 
 ```bash
-cd streaming-dictation/backend
-
-# Install dependencies
+cd /root/voicenotebot/streaming-dictation/backend
 npm install
-
-# Start dev server with hot reload
 npm run dev
-
-# Build TypeScript to dist/
-npm run build
-
-# Run production build
-npm start
-
-# Type check only
+npm test
 npm run typecheck
-
-# Run tests
-npm test
+npm run build
+npm start
 ```
 
----
+## Main Route Groups
 
-## Project Structure
+| Route group | Purpose |
+|---|---|
+| `/auth/*` | Login, logout, session check |
+| `/api/recordings/*` | Start, stream, finish, warmup |
+| `/api/transcripts/*` | List, search, fetch, delete |
+| `/api/settings` | Read/update cleanup model and retention |
+| `/health` | Liveness check |
 
-```
-src/
-  index.ts           — Express app setup, route mounting, static asset serving
-  config.ts          — env var loading, defaults
-  db.ts              — SQLite schema init, DB type
-  middleware/
-    auth.ts          — sessionMiddleware(), requireAuth middleware
-  routes/
-    auth.ts          — POST /auth/login, POST /auth/logout, GET /auth/session
-    recordings.ts    — POST /api/recordings/start, /:id/stream, /:id/finish
-    transcripts.ts   — GET /api/transcripts, /search, /:id, DELETE /:id
-    settings.ts      — GET/PUT /api/settings
-    health.ts        — GET /health
-  services/
-    auth.ts          — verifyPassword() using bcrypt
-    stt.ts           — transcribeWithFallback() — OpenAI primary + batch fallback
-    cleanup.ts       — cleanupTranscript() — Kimi or gpt-5-nano
-    retention.ts     — scheduleRetention() — interval-based expired record cleanup
-tests/
-  setup.ts           — createTestDb(), createTestApp() test utilities
-  auth.test.ts
-  api.test.ts
-  transcripts.test.ts
-  settings.test.ts
-  cleanup.test.ts
-  stt.test.ts
-  retention.test.ts
-```
+## Recording Runtime Model
 
----
+The backend currently uses an in-memory active-recordings map.
 
-## Environment Variables
+That means:
+- `/start` creates an entry
+- `/stream` appends chunk buffers
+- `/finish` consumes the buffered chunks, produces a transcript, and deletes the entry
 
-Create `streaming-dictation/backend/.env` (copy from `.env.example`):
+### Operational consequence
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `PORT` | No | `3100` | HTTP server port |
-| `SESSION_SECRET` | **Yes** | `dev-secret-change-in-prod` | Express session signing secret |
-| `PASSWORD_HASH` | **Yes** | `` (empty = no auth) | bcrypt hash of the login password |
-| `OPENAI_API_KEY` | **Yes** | — | OpenAI API key for STT + cleanup |
-| `KIMI_API_KEY` | **Yes** | — | Kimi (Moonshot) API key for cleanup |
-| `DEFAULT_CLEANUP_MODEL` | No | `kimi` | Default cleanup model: `kimi` or `gpt-5-nano` |
-| `RETENTION_DAYS` | No | `14` | How many days to keep transcripts |
-| `DATABASE_PATH` | No | `backend/data/transcripts.db` | Path to SQLite file |
-| `NODE_ENV` | No | `development` | Set to `production` for production |
+If the process restarts during a recording, that in-progress recording is lost.
 
-### Generate a password hash
+## STT Behaviour
 
-```bash
-node -e "const bcrypt = require('bcrypt'); bcrypt.hash('yourpassword', 12).then(h => console.log(h))"
-```
+Current model:
+- OpenAI `gpt-4o-mini-transcribe` is the main STT model
+- the backend attempts a primary path first
+- if necessary, it retries via a fallback path
+- longer recordings may benefit from speculative transcription started before `finish`
 
-Then set `PASSWORD_HASH=<output>` in `.env`.
+## Cleanup Behaviour
 
----
+Current supported cleanup models:
+- Kimi
+- OpenAI `gpt-5-nano`
 
-## Database Schema
+If cleanup fails, the backend keeps the raw transcript rather than failing the entire recording flow.
 
-Two tables managed by `db.ts`:
+## Warmup / Latency Behaviour
 
-### `transcripts`
+The backend exposes a warmup endpoint to reduce initial latency when the app has been idle.
 
-| Column | Type | Notes |
-|---|---|---|
-| `id` | TEXT PK | UUID from recording session |
-| `created_at` | TEXT | ISO 8601 UTC |
-| `expires_at` | TEXT | ISO 8601 UTC (created_at + retention_days) |
-| `preview_text` | TEXT | First 200 chars of cleaned_text |
-| `raw_text` | TEXT | Raw STT output |
-| `cleaned_text` | TEXT | Cleanup model output |
-| `cleanup_model` | TEXT | `kimi` or `gpt-5-nano` |
-| `stt_model` | TEXT | `gpt-4o-mini-transcribe` |
-| `used_fallback` | INTEGER | `0` = primary, `1` = batch fallback used |
-| `duration_ms` | INTEGER | Recording duration in ms |
-| `status` | TEXT | `completed` or `failed` |
+This is a performance feature, not a separate product workflow.
 
-### `user_settings`
+## Session / Proxy Notes
 
-Single row (id=1):
+Important runtime details:
+- Express is configured with `trust proxy`
+- secure cookies depend on HTTPS and correct reverse-proxy forwarding
+- production deployments should assume a reverse proxy such as Caddy in front of the app
 
-| Column | Type | Default |
-|---|---|---|
-| `id` | INTEGER PK | 1 |
-| `default_cleanup_model` | TEXT | `kimi` |
-| `retention_days` | INTEGER | 14 |
+## Frontend Serving
 
----
+The backend serves the built frontend `dist/` directory directly. In production, one backend process handles both API traffic and static app delivery.
 
-## STT Flow
+## Persistence
 
-Implemented in `services/stt.ts`:
+SQLite stores:
+- transcripts
+- user settings
+- sessions
 
-1. **Primary:** Assemble all chunks into a single `Buffer`, submit to `openai.audio.transcriptions.create` with model `gpt-4o-mini-transcribe`
-2. **Fallback:** If primary throws, retry with the same model and a different request strategy (batch rescue path)
-3. Returns `{ text, model, usedFallback: boolean }`
+Retention cleanup periodically deletes expired transcript rows.
 
----
+## Current Verification Notes
 
-## Cleanup Flow
-
-Implemented in `services/cleanup.ts`:
-
-### Kimi
-
-- Endpoint: `https://api.moonshot.cn/v1/chat/completions`
-- Model: `moonshot-v1-8k`
-- Auth: `Authorization: Bearer <KIMI_API_KEY>`
-- Request: `Content-Type: application/json`
-- Prompt: Clean up voice transcript, preserve meaning, fix punctuation/capitalisation
-
-### OpenAI gpt-5-nano
-
-- Endpoint: OpenAI chat completions via SDK
-- Model: `gpt-5-nano`
-- Same cleanup prompt intent
-
-Both return `{ cleanedText: string }`.
-
----
-
-## Retention Job
-
-`services/retention.ts` exports `scheduleRetention(db, retentionDays)`:
-- Runs at startup and then every 6 hours
-- `DELETE FROM transcripts WHERE expires_at < datetime('now')`
-- Returns the interval handle (cleared on SIGTERM)
-
----
-
-## Recording Session Handling
-
-`routes/recordings.ts` keeps an in-memory `Map<string, ActiveRecording>`:
-- `POST /api/recordings/start` — creates entry with empty chunks array
-- `POST /api/recordings/:id/stream` — appends `Buffer` chunk
-- `POST /api/recordings/:id/finish` — assembles blob, runs STT, cleanup, persists transcript, deletes from Map
-
-Sessions are ephemeral (in-memory). A backend restart loses in-progress recordings. This is acceptable for v1.
-
----
-
-## Frontend Asset Serving
-
-`src/index.ts` serves the built frontend:
-
-```ts
-const frontendDist = path.join(__dirname, '..', '..', 'frontend', 'dist')
-app.use(express.static(frontendDist))
-app.get('*', (_req, res) => res.sendFile(path.join(frontendDist, 'index.html')))
-```
-
-This means one process (port 3100) serves both the API and the SPA.
-
----
-
-## API Summary
-
-See [API.md](./API.md) for full request/response shapes.
-
-| Method | Path | Auth | Purpose |
-|---|---|---|---|
-| POST | `/auth/login` | No | Login with password |
-| POST | `/auth/logout` | No | Destroy session |
-| GET | `/auth/session` | No | Check session |
-| POST | `/api/recordings/start` | Yes | Start recording session |
-| POST | `/api/recordings/:id/stream` | Yes | Upload audio chunk |
-| POST | `/api/recordings/:id/finish` | Yes | Finalize, returns Transcript |
-| GET | `/api/transcripts` | Yes | List all (newest first) |
-| GET | `/api/transcripts/search?q=` | Yes | Text search |
-| GET | `/api/transcripts/:id` | Yes | Single transcript |
-| DELETE | `/api/transcripts/:id` | Yes | Delete transcript |
-| GET | `/api/settings` | Yes | Get settings |
-| PUT | `/api/settings` | Yes | Update settings |
-| GET | `/health` | No | Health check |
-
----
-
-## Testing
-
-```bash
-npm test
-```
-
-Tests use an in-memory SQLite database (`:memory:`) and `supertest` for route integration tests. OpenAI and Kimi clients are mocked.
-
-See [TESTING.md](./TESTING.md) for full test strategy.
+Current checked status:
+- backend tests pass
+- backend typecheck passes
+- backend lint currently fails because ESLint v9 expects a flat `eslint.config.*` file

@@ -1,439 +1,284 @@
 # VoiceNote Bot
 
-This repository contains two related voice-to-text systems:
+This repository now contains **two related voice-to-text systems**:
 
-1. **Legacy Telegram Bot** — Queue-based Telegram bot using FastAPI + RQ + local Whisper + Kimi cleanup. See [documentation below](#architecture).
-2. **Streaming Dictation** — Browser-based voice dictation web app using Node.js + Express + SQLite + OpenAI STT + Kimi/OpenAI cleanup. See [Streaming Dictation docs](./docs/STREAMING-DICTATION/README.md).
+1. **Streaming Dictation** — the primary current product: a browser-based dictation PWA with session auth, transcript history, search, settings, retention, and AI cleanup.
+2. **Legacy Telegram Bot** — the original queue-based Telegram voice-note bot, still kept working as a backup path.
 
----
+## Start Here
 
-## Legacy Telegram Bot
-
-A robust, queue-based Telegram voice-to-text transcription bot using FastAPI, RQ (Redis Queue), OpenAI Whisper (local), and Kimi API for transcript cleanup.
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           VoiceNote Bot Architecture                        │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│   ┌──────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────┐  │
-│   │ Telegram │────▶│  Caddy Proxy │────▶│   Webhook    │────▶│  Redis   │  │
-│   │   Bot    │     │   (HTTPS)    │     │   (FastAPI)  │     │  Queue   │  │
-│   └──────────┘     └──────────────┘     └──────────────┘     └────┬─────┘  │
-│         ▲                                                         │        │
-│         │                                                         ▼        │
-│         │                              ┌─────────────────────────────────┐ │
-│         │                              │           Workers               │ │
-│         │                              │  ┌─────────────┐ ┌────────────┐ │ │
-│         │                              │  │ Worker 1    │ │ Worker 2   │ │ │
-│         │                              │  │ (max 3GB)   │ │ (max 3GB)  │ │ │
-│         │                              │  └──────┬──────┘ └─────┬──────┘ │ │
-│         │                              └─────────┼──────────────┼────────┘ │
-│         │                                        │              │          │
-│         │                                        └──────┬───────┘          │
-│         │                                               │                  │
-│         │                                               ▼                  │
-│         │                              ┌─────────────────────────────────┐ │
-│         │                              │     External Services           │ │
-│         │                              │  ┌──────────┐  ┌─────────────┐  │ │
-│         │                              │  │ Whisper  │  │  Kimi API   │  │ │
-│         │                              │  │ (local)  │  │  (remote)   │  │ │
-│         │                              │  └──────────┘  └─────────────┘  │ │
-│         │                              └─────────────────────────────────┘ │
-│         │                                                                   │
-│         └───────────────────────────────────────────────────────────────────┘
-│                                    (Send transcription result back)         │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Services & Components
-
-### Core Services
-
-| Service | Technology | Purpose | Location |
-|---------|------------|---------|----------|
-| **Webhook** | FastAPI + Uvicorn | Receives Telegram webhooks, enqueues jobs | `webhook/` |
-| **Worker** | Python + RQ | Processes voice notes (2 replicas) | `worker/` |
-| **Queue** | Redis | Job queue management | Docker container |
-| **Shared** | Python modules | Telegram client, Kimi client, logger | `shared/` |
-
-### External Dependencies
-
-| Service | Location | Description |
-|---------|----------|-------------|
-| **Whisper** | `/root/whisper/` | Local OpenAI Whisper ASR service |
-| **Kimi API** | `api.kimi.com` | Remote LLM for transcript cleanup |
-| **Telegram** | `api.telegram.org` | Telegram Bot API |
-
-### Whisper Concurrency Control
-
-To prevent performance degradation, Whisper access is controlled via **Redis distributed locks**:
-- Only **1 worker** can use Whisper at a time
-- Additional workers wait with exponential backoff
-- Prevents 10-20x slowdown from CPU contention
-
-## Whisper Service Details
-
-The local Whisper service is located at `/root/whisper/` and runs as a separate Docker container.
-
-### API Endpoint
-
-```
-POST http://whisper:9000/asr
-```
-
-### Request Format
-
-```python
-files = {"audio_file": (filename, file_content, mime_type)}
-data = {"language": "auto"}
-
-# Supported MIME types:
-# - audio/ogg (.oga, .ogg)
-# - audio/mpeg (.mp3)
-# - audio/mp4 (.m4a)
-# - audio/wav (.wav)
-# - audio/webm (.webm)
-```
-
-### Response Format
-
-Whisper returns the transcription as **plain text** (not JSON):
-
-```
-This is the transcribed text from the voice note.
-```
-
-## Logging Strategy
-
-All services use **structured logging** with [structlog](https://www.structlog.org/):
-
-- **Format**: JSON in production, colored console in development
-- **Levels**: INFO for normal operations, DEBUG for troubleshooting
-- **Fields**: timestamp, level, filename, lineno, and contextual data
-
-### Log Locations
-
-```bash
-# View webhook logs
-docker logs -f voicenotebot-webhook
-
-# View worker logs
-docker logs -f voicenotebot-worker-1
-docker logs -f voicenotebot-worker-2
-
-# View Redis logs
-docker logs -f voicenotebot-redis
-```
-
-### Key Log Events
-
-| Event | Level | Description |
-|-------|-------|-------------|
-| `webhook_processed_successfully` | INFO | Voice message received and queued |
-| `transcription_job_enqueued` | INFO | Job added to Redis queue |
-| `Whisper transcription successful` | INFO | ASR completed |
-| `Whisper transcription complete - RAW OUTPUT` | INFO | **Full Whisper output for debugging** |
-| `Kimi cleanup complete - RAW OUTPUT` | INFO | **Full Kimi output for comparison** |
-| `transcript_cleaned` | INFO | Kimi cleanup completed |
-| `Voice note transcription complete` | INFO | Full pipeline succeeded |
-| `Whisper transcription error` | ERROR | ASR failed with details |
-| `Waiting for Whisper lock` | INFO | Worker waiting for Whisper access |
-| `Whisper lock acquired` | INFO | Worker obtained exclusive Whisper access |
-
-### Debug Logging for Gibberish Issues
-
-To diagnose transcription quality issues, the worker now logs **raw output** from both services:
-
-```bash
-# View raw Whisper vs Kimi output
-docker logs voicenotebot-worker-1 | grep "RAW OUTPUT"
-
-# Check for differences between Whisper and Kimi
-docker logs voicenotebot-worker-1 | grep "was_modified"
-
-# Monitor lock acquisition
-docker logs voicenotebot-worker-1 | grep -E "(lock|waiting)"
-```
-
-Each log entry includes:
-- `transcript_preview`: First 500 chars of output
-- `transcript_hash`: Hash for easy comparison
-- `was_modified`: Whether Kimi changed the Whisper output
-
-## Streaming Dictation
-
-A browser-based PWA for voice-to-text dictation. Access at `dictate.letsautomate.work`.
-
-| Component | Technology | Port | Service |
-|-----------|-----------|------|---------|
-| Backend | Node.js + Express + SQLite | 3100 | `streaming-dictation.service` |
-| Frontend | React + Vite + TypeScript + Tailwind (PWA) | served by backend | — |
-| STT | OpenAI `gpt-4o-mini-transcribe` | — | — |
-| Cleanup | Kimi (`kimi-for-coding`) or OpenAI (`gpt-5-nano`) | — | — |
-| Reverse proxy | Caddy (HTTPS) | 443 | Docker container |
-
-### Common Operations
-
-```bash
-# Service status
-systemctl status streaming-dictation
-
-# Restart
-systemctl restart streaming-dictation
-
-# View logs
-journalctl -u streaming-dictation -f
-
-# Health check
-curl http://localhost:3100/health
-```
-
-See [Streaming Dictation docs](./docs/STREAMING-DICTATION/README.md) for full documentation.
+- **Quick agent/developer guide:** [`AGENTS.md`](./AGENTS.md)
+- **Streaming Dictation docs:** [`docs/STREAMING-DICTATION/README.md`](./docs/STREAMING-DICTATION/README.md)
+- **Streaming Dictation operations:** [`docs/STREAMING-DICTATION/OPERATIONS.md`](./docs/STREAMING-DICTATION/OPERATIONS.md)
+- **Streaming Dictation testing:** [`docs/STREAMING-DICTATION/TESTING.md`](./docs/STREAMING-DICTATION/TESTING.md)
+- **Implementation plan:** [`STREAMING-DICTATION-PLAN.md`](./STREAMING-DICTATION-PLAN.md)
+- **Architecture research:** [`RESEARCH-FINDINGS.md`](./RESEARCH-FINDINGS.md)
 
 ---
 
-## Legacy Telegram Bot — Quick Start
+## Current Status
 
-### Prerequisites
+### Streaming Dictation
 
-- Docker & Docker Compose installed
-- Telegram Bot Token (from @BotFather)
-- Kimi API Key
-- Existing Whisper service running at `/root/whisper/`
+The new streaming dictation system is now a fully operational single-user web app/PWA.
 
-### Environment Setup
+Implemented today:
+- password login + session cookie auth
+- browser microphone capture via `MediaRecorder`
+- recording lifecycle: `start` → `stream` → `finish`
+- OpenAI STT with fallback handling
+- cleanup via **Kimi** or **OpenAI `gpt-5-nano`**
+- transcript history, search, copy, and settings
+- SQLite persistence with retention cleanup
+- warmup endpoint for lower-latency requests
+- speculative transcription for faster finish-time results
+- visibility-aware polling for history refresh
+- `no-store` API caching to avoid stale history results
+- systemd service + deploy script
+- installable PWA shell
 
-1. Copy the example environment file:
+Recent checks run against the current repo state:
+- `streaming-dictation/backend`: `npm test` ✅, `npm run typecheck` ✅
+- `streaming-dictation/frontend`: `npm test` ✅, `npm run typecheck` ✅, `npm run build` ✅
+- `streaming-dictation/backend`: `npm run lint` currently **fails** because ESLint v9 expects a flat `eslint.config.*` file
+
+### Legacy Telegram Bot
+
+The legacy Telegram bot remains in the repo and is still intended to work as a fallback transcription path.
+
+It provides:
+- FastAPI webhook intake
+- Redis/RQ queueing
+- worker-based transcription pipeline
+- Telegram file download + response send-back
+- local Whisper/OpenAI-style transcription flow
+- Kimi cleanup
+- Docker Compose-based deployment
+
+---
+
+## Architecture at a Glance
+
+```text
+Streaming Dictation (primary)
+  Browser PWA
+    -> /auth/* and /api/*
+    -> Express + TypeScript backend
+    -> OpenAI STT + Kimi/OpenAI cleanup
+    -> SQLite transcript store
+    -> systemd service behind Caddy
+
+Legacy Telegram Bot (backup)
+  Telegram
+    -> FastAPI webhook
+    -> Redis queue
+    -> RQ workers
+    -> Whisper / OpenAI-style transcription + Kimi cleanup
+    -> Docker Compose
+```
+
+---
+
+## Repo Layout
+
+```text
+streaming-dictation/         Primary browser-based dictation app
+  backend/                   Node + Express + SQLite backend
+  frontend/                  React + Vite + TypeScript + PWA frontend
+  scripts/                   Deploy helper(s)
+  systemd/                   Service unit(s)
+
+docs/STREAMING-DICTATION/    Streaming Dictation documentation
+
+webhook/                     Legacy Telegram webhook service
+worker/                      Legacy RQ worker pipeline
+shared/                      Legacy shared Python utilities
+tests/                       Legacy Python test suite
+
+docker-compose.yml           Legacy Telegram bot orchestration
+STREAMING-DICTATION-PLAN.md  Planning document for the new app
+RESEARCH-FINDINGS.md         Architecture research and rationale
+```
+
+---
+
+# Streaming Dictation
+
+A browser-based PWA for phone-first and desktop dictation.
+
+## Stack
+
+| Component | Technology | Notes |
+|---|---|---|
+| Backend | Node.js + Express + TypeScript | Serves API and built frontend |
+| Database | SQLite | WAL mode, local single-user persistence |
+| Frontend | React + Vite + TypeScript + Tailwind | Responsive PWA |
+| STT | OpenAI `gpt-4o-mini-transcribe` | Primary transcription model |
+| Cleanup | Kimi or OpenAI `gpt-5-nano` | User-selectable cleanup |
+| Auth | Session cookie | Single-user password login |
+| Service | systemd | Production runtime |
+| Proxy | Caddy | HTTPS / reverse proxy |
+
+## Quick Start
+
+### Backend setup
+
 ```bash
+cd /root/voicenotebot/streaming-dictation/backend
+npm install
 cp .env.example .env
 ```
 
-2. Edit `.env` with your credentials:
+Generate a password hash:
+
+```bash
+node -e "const bcrypt = require('bcrypt'); bcrypt.hash('your-password', 10).then(h => console.log(h))"
+```
+
+Add the generated hash to `.env` as `PASSWORD_HASH=...`, then build:
+
+```bash
+npm run build
+```
+
+### Frontend setup
+
+```bash
+cd /root/voicenotebot/streaming-dictation/frontend
+npm install
+npm run build
+```
+
+### Run via systemd
+
+```bash
+systemctl start streaming-dictation
+systemctl status streaming-dictation
+journalctl -u streaming-dictation -f
+```
+
+### Deploy updates
+
+```bash
+bash /root/voicenotebot/streaming-dictation/scripts/deploy.sh
+```
+
+## Common Operations
+
+```bash
+# Health
+curl http://localhost:3100/health
+
+# Restart service
+systemctl restart streaming-dictation
+
+# Backend tests
+cd /root/voicenotebot/streaming-dictation/backend && npm test
+
+# Frontend tests
+cd /root/voicenotebot/streaming-dictation/frontend && npm test
+```
+
+## Documentation Map
+
+- [`docs/STREAMING-DICTATION/README.md`](./docs/STREAMING-DICTATION/README.md) — docs index and product overview
+- [`docs/STREAMING-DICTATION/ARCHITECTURE.md`](./docs/STREAMING-DICTATION/ARCHITECTURE.md) — backend/frontend/runtime behaviour
+- [`docs/STREAMING-DICTATION/API.md`](./docs/STREAMING-DICTATION/API.md) — REST API
+- [`docs/STREAMING-DICTATION/AUTH.md`](./docs/STREAMING-DICTATION/AUTH.md) — auth model
+- [`docs/STREAMING-DICTATION/OPERATIONS.md`](./docs/STREAMING-DICTATION/OPERATIONS.md) — deployment and service management
+- [`docs/STREAMING-DICTATION/TESTING.md`](./docs/STREAMING-DICTATION/TESTING.md) — checks and test coverage
+- [`docs/STREAMING-DICTATION/TROUBLESHOOTING.md`](./docs/STREAMING-DICTATION/TROUBLESHOOTING.md) — common issues
+- [`docs/STREAMING-DICTATION/BACKEND.md`](./docs/STREAMING-DICTATION/BACKEND.md) — backend-focused implementation notes
+- [`docs/STREAMING-DICTATION/FRONTEND.md`](./docs/STREAMING-DICTATION/FRONTEND.md) — frontend-focused implementation notes
+
+---
+
+# Legacy Telegram Bot
+
+A queue-based Telegram voice-to-text transcription bot using FastAPI, Redis/RQ, and worker processes.
+
+## Legacy Architecture
+
+```text
+Telegram
+  -> Caddy / HTTPS
+  -> FastAPI webhook
+  -> Redis queue
+  -> RQ workers
+  -> Whisper / OpenAI-style transcription path
+  -> Kimi cleanup
+  -> Telegram reply
+```
+
+## Core Services
+
+| Service | Technology | Purpose | Location |
+|---|---|---|---|
+| Webhook | FastAPI + Uvicorn | Receives Telegram updates, enqueues jobs | `webhook/` |
+| Worker | Python + RQ | Processes voice notes | `worker/` |
+| Queue | Redis | Job queue management | Docker container |
+| Shared | Python modules | Telegram client, Kimi client, logging | `shared/` |
+
+## Legacy Quick Start
+
+### Prerequisites
+
+- Docker & Docker Compose
+- Telegram bot token
+- Kimi API key
+- Whisper service available at `/root/whisper/`
+
+### Configure
+
+```bash
+cd /root/voicenotebot
+cp .env.example .env
+```
+
+Fill in at least:
+
 ```bash
 TELEGRAM_BOT_TOKEN=your_token_here
 KIMI_API_KEY=your_key_here
 ```
 
-### Start Services
+### Run
 
 ```bash
-# Start all services
 docker compose up -d
-
-# Verify all containers are running
 docker compose ps
-
-# Check health endpoint
 curl http://localhost:9999/health
 ```
 
-### Stop Services
+### Stop
 
 ```bash
-# Stop all services gracefully
 docker compose down
-
-# Stop and remove all data (including Redis queue)
-docker compose down -v
 ```
 
-### Restart Services
+### Logs
 
 ```bash
-# Restart all
-docker compose restart
-
-# Restart specific service
-docker compose restart worker
-docker compose restart webhook
-```
-
-## Debugging Guide
-
-### Check Service Status
-
-```bash
-# List all containers
-docker compose ps
-
-# Check resource usage
-docker stats --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.Status}}"
-```
-
-### Monitor Queue
-
-```bash
-# Check pending jobs
-docker exec voicenotebot-redis redis-cli LLEN rq:queue:default
-
-# Check failed jobs
-docker exec voicenotebot-redis redis-cli ZCARD rq:failed:default
-
-# View failed job details
-docker exec voicenotebot-redis redis-cli ZRANGE rq:failed:default 0 -1
-
-# Clear failed jobs
-docker exec voicenotebot-redis redis-cli DEL rq:failed:default
-```
-
-### Debug Worker Issues
-
-```bash
-# Follow worker logs in real-time
+docker logs -f voicenotebot-webhook
 docker logs -f voicenotebot-worker-1
-
-# Check for import errors
-docker exec voicenotebot-worker-1 python3 -c "from tasks import process_voice_note; print('OK')"
-
-# Test Whisper connectivity
-docker exec voicenotebot-worker-1 python3 -c "
-import httpx
-r = httpx.get('http://whisper:9000/health', timeout=10)
-print(f'Status: {r.status_code}')
-"
+docker logs -f voicenotebot-worker-2
 ```
 
-### Debug Webhook Issues
+## Legacy Notes
 
-```bash
-# Test webhook locally
-curl -X POST http://localhost:9999/webhook \
-  -H "Content-Type: application/json" \
-  -d '{"message":{"voice":{"file_id":"test"},"chat":{"id":123}}}'
+- The legacy bot remains useful as a fallback path.
+- Whisper access is guarded with a Redis-based distributed lock to reduce contention.
+- Some legacy Python test/docs surfaces may need refresh before being treated as authoritative current coverage.
 
-# Check Telegram webhook status
-curl "https://api.telegram.org/bot<YOUR_TOKEN>/getWebhookInfo"
-
-# View webhook logs
-docker logs voicenotebot-webhook --tail 50
-```
-
-### Common Issues
-
-| Issue | Solution |
-|-------|----------|
-| Worker can't find tasks | Check `tasks.py` exists at root, rebuild workers |
-| Whisper returns empty | Verify MIME type is set (audio/ogg for .oga files) |
-| **Transcription is gibberish/wrong language** | Check `RAW OUTPUT` logs to see if issue is Whisper or Kimi |
-| **Slow transcription (5+ minutes)** | Check `Waiting for Whisper lock` - may be queued behind another job |
-| Kimi API errors | Check API key, verify token limits |
-| Queue growing | Check worker logs for errors, ensure 2 workers running |
-| Webhook 404 | Verify Caddy config, check webhook URL |
-
-## Production Deployment
-
-### Persistence & Restart Policy
-
-All containers are configured with `restart: always` to:
-- Restart on crash
-- Start automatically after server reboot
-- Recover from Docker daemon restarts
-
-### Resource Limits
-
-- **Worker**: 3GB RAM limit per worker (2 workers max = 6GB peak)
-- **Webhook**: Minimal resources (stateless)
-- **Redis**: Uses volume for data persistence
-
-### Monitoring
-
-```bash
-# Set up a simple health check script
-#!/bin/bash
-# health_check.sh
-
-if ! curl -sf http://localhost:9999/health > /dev/null; then
-    echo "$(date): Webhook unhealthy, restarting..."
-    docker compose restart webhook
-fi
-```
-
-### Backup
-
-```bash
-# Backup Redis data
-docker exec voicenotebot-redis redis-cli SAVE
-docker cp voicenotebot-redis:/data/dump.rdb /backup/redis-$(date +%Y%m%d).rdb
-```
-
-## File Structure
-
-```
-.
-├── docker-compose.yml      # Container orchestration
-├── .env                    # Environment variables (not in git)
-├── .env.example            # Environment template
-├── .gitignore              # Git ignore rules
-├── tasks.py                # Root-level RQ task exports
-├── shared/                 # Shared utilities
-│   ├── __init__.py
-│   ├── logger.py          # Structured logging
-│   ├── telegram_client.py # Telegram API wrapper
-│   ├── kimi_client.py     # Kimi API wrapper
-│   └── requirements.txt
-├── webhook/               # FastAPI webhook service
-│   ├── Dockerfile
-│   ├── main.py
-│   └── requirements.txt
-├── worker/                # RQ worker service
-│   ├── Dockerfile
-│   ├── tasks.py          # Main processing logic
-│   └── requirements.txt
-└── tests/                 # Test suite
-    ├── conftest.py
-    ├── test_webhook.py
-    ├── test_tasks.py
-    └── test_integration.py
-```
-
-## Development
-
-### Running Tests
-
-```bash
-# Install test dependencies
-pip install -r tests/requirements.txt
-
-# Run all tests
-pytest tests/
-
-# Run with coverage
-pytest tests/ --cov=shared --cov=worker --cov=webhook
-```
-
-### Rebuilding After Changes
-
-```bash
-# Rebuild specific service
-docker compose build worker
-docker compose up -d --force-recreate worker
-
-# Rebuild all
-docker compose build
-docker compose up -d
-```
+---
 
 ## Security Notes
 
-- `.env` file contains secrets and is **gitignored**
-- Redis is not exposed externally (no port mapping)
-- **Webhook binds to localhost only** (`127.0.0.1:9999`) - prevents external scanner access
-- Webhook uses HTTPS via Caddy reverse proxy
-- Workers have memory limits to prevent OOM crashes
-- Docker log rotation configured (10MB × 5 files max)
+- Secrets live in `.env` files and should not be committed.
+- Streaming Dictation depends on correct HTTPS/reverse-proxy handling for secure session cookies.
+- Remote microphone access requires HTTPS or localhost.
+- The legacy Redis queue is not intended to be exposed publicly.
 
 ## License
 
-Private - For personal use only.
-
-## Troubleshooting Support
-
-For issues or questions, check the logs first:
-```bash
-docker compose logs -f --tail 100
-```
-
-Then refer to the [Debugging Guide](#debugging-guide) section above.
+Private repository / personal use.

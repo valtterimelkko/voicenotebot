@@ -2,96 +2,154 @@
 
 ## Missing Environment Variables
 
-**Symptom**: Login always returns 401, or API calls fail silently.
+**Symptom**: Login always returns 401, or API calls fail.
 
-**Check**: Verify all required vars are set in `.env`:
+**Check**:
 
 ```bash
 grep -E '(PASSWORD_HASH|OPENAI_API_KEY|KIMI_API_KEY|SESSION_SECRET)' \
   /root/voicenotebot/streaming-dictation/backend/.env
 ```
 
-`PASSWORD_HASH` must be a bcrypt hash (starts with `$2b$...`), not a plaintext password.
+`PASSWORD_HASH` must be a bcrypt hash, not a plaintext password.
+
+---
+
+## Login / Session Works Locally but Fails Behind Proxy
+
+**Symptom**: The app behaves correctly on localhost, but login/session handling breaks in production.
+
+**Likely cause**: Reverse-proxy forwarding or HTTPS cookie setup is wrong.
+
+**Check**:
+- service is running behind HTTPS
+- proxy forwards requests correctly to port `3100`
+- `NODE_ENV=production` is set when using secure cookies
+- browser is actually receiving/sending the session cookie
+
+**Why this matters**: The app depends on correct reverse-proxy behaviour for secure session cookies.
 
 ---
 
 ## OpenAI STT Failures
 
-**Symptom**: Recordings finish with empty `raw_text` and `cleaned_text`.
+**Symptom**: Recordings finish with empty `raw_text` and `cleaned_text`, or transcripts come back blank.
 
 **Check logs**:
 
 ```bash
-journalctl -u streaming-dictation | grep -i "STT\|transcription\|openai"
+journalctl -u streaming-dictation | grep -i 'stt\|transcription\|openai'
 ```
 
 **Common causes**:
-- Invalid or expired `OPENAI_API_KEY`
-- Audio chunks too small or corrupted
-- Network connectivity to `api.openai.com`
-- Model `gpt-4o-mini-transcribe` not available on your plan
+- invalid or expired `OPENAI_API_KEY`
+- unsupported/invalid audio payload
+- network connectivity issues to OpenAI
+- model availability/account issues
 
-The system attempts a fallback: if `streamTranscribe()` fails, `batchTranscribe()` is tried. If both fail, the transcript is saved with empty text.
+**Behaviour to expect**:
+- the app first tries its primary STT path
+- if that fails, it attempts a fallback path
+- if both fail, the transcript may be stored with empty text
 
 ---
 
 ## Kimi Cleanup Failures
 
-**Symptom**: `cleaned_text` is identical to `raw_text` (cleanup was skipped).
+**Symptom**: `cleaned_text` is identical to `raw_text`, or transcripts appear uncleaned.
 
 **Check logs**:
 
 ```bash
-journalctl -u streaming-dictation | grep -i "kimi"
+journalctl -u streaming-dictation | grep -i kimi
 ```
 
 **Common causes**:
-- Invalid `KIMI_API_KEY`
-- Kimi API rate limiting (HTTP 429)
-- Request timeout (300s limit exceeded for very long transcripts)
-- Network connectivity to `api.kimi.com`
+- invalid `KIMI_API_KEY`
+- Kimi API timeout or rate limit
+- network issues
 
-**Mitigation**: If Kimi is unreliable, switch to OpenAI cleanup:
+**Expected fallback behaviour**:
+- if cleanup fails, the app keeps the raw transcript rather than failing the whole recording
 
-```bash
-# In .env
-DEFAULT_CLEANUP_MODEL=gpt-5-nano
-```
-
-Or update via API:
+**Temporary mitigation**:
+Switch cleanup to OpenAI:
 
 ```bash
 curl -X PUT http://localhost:3100/api/settings \
-  -H "Content-Type: application/json" \
+  -H 'Content-Type: application/json' \
   -b cookie.txt \
   -d '{"default_cleanup_model":"gpt-5-nano"}'
 ```
 
 ---
 
+## History Page Looks Stale
+
+**Symptom**: A newly finished transcript does not immediately appear in history, or history seems old after returning to the tab.
+
+**Current behaviour**:
+- history polling is visibility-aware
+- hidden tabs pause polling
+- returning to a visible tab triggers a refresh
+- API responses are intentionally `no-store`
+
+**What to check**:
+- bring the tab back into focus
+- confirm requests are actually reaching `/api/transcripts`
+- hard refresh if you suspect an old frontend bundle after deploy
+
+If the issue only happens after deployment, also verify that the frontend bundle and backend code were both rebuilt.
+
+---
+
+## Warmup Endpoint Confusion
+
+**Symptom**: You see `/api/recordings/warmup` in logs and are unsure whether something is wrong.
+
+**Explanation**:
+This is a normal latency-reduction endpoint. It exists to warm external connections before or around recording use. It is a performance optimisation, not an error path.
+
+---
+
+## Speculative Transcription Confusion
+
+**Symptom**: A longer recording finishes faster than expected, or logs suggest transcription work began before `finish`.
+
+**Explanation**:
+This is normal. The backend can begin speculative transcription during longer recordings to reduce wait time after stop.
+
+---
+
 ## Microphone Permission Denied
 
-**Symptom**: Frontend cannot start recording, browser shows permission prompt or error.
+**Symptom**: Frontend cannot start recording.
 
-**Fix**: This is a browser/OS issue, not a backend issue.
+**Fix**:
+- allow microphone access in the browser
+- confirm the browser/device has an available microphone
+- ensure you are using HTTPS or localhost
 
-- Chrome: Settings > Privacy and security > Site Settings > Microphone
-- Firefox: URL bar > camera icon > Allow microphone
-- Safari: Safari > Settings > Websites > Microphone
-- **Important**: Microphone access requires HTTPS or localhost. The PWA will not work on `http://<ip>:3100` from a remote device without HTTPS.
+**Important**:
+Remote microphone access will not work reliably on plain `http://<ip>:3100` from another device.
 
 ---
 
 ## Mobile Browser Issues
 
-**Symptom**: Recording doesn't work on iOS Safari or Android Chrome.
+**Symptom**: Recording fails on iPhone/iPad/Android, or stops when the screen locks.
 
-**Common issues**:
-- iOS Safari requires user gesture to start audio capture
-- Some mobile browsers don't support `MediaRecorder` with WebM codec
-- Audio capture stops when the screen locks
+**Common causes**:
+- browser-specific `MediaRecorder` limitations
+- iOS/Safari permission quirks
+- screen lock/backgrounding interrupting capture
+- browser codec support differences
 
-**Check**: Open browser developer tools (if available) for Web Audio API errors.
+**What to try**:
+- keep the screen awake during recording
+- retry after reloading the page
+- test in a current version of Chrome/Safari
+- verify HTTPS is in place
 
 ---
 
@@ -99,76 +157,97 @@ curl -X PUT http://localhost:3100/api/settings \
 
 **Symptom**: API requests return `401 { "error": "Authentication required" }`.
 
-**Cause**: Session cookie expired (TTL is 7 days) or server was restarted (in-memory session store resets if not using persistent store).
+**Cause**:
+- session expired
+- cookie missing
+- server/proxy/cookie mismatch after restart or deploy
 
-**Fix**: Re-authenticate:
+**Fix**:
+Log in again.
+
+CLI example:
 
 ```bash
 curl -X POST http://localhost:3100/auth/login \
-  -H "Content-Type: application/json" \
+  -H 'Content-Type: application/json' \
   -c cookie.txt \
   -d '{"password":"your-password"}'
 ```
 
 ---
 
-## Database Locked
+## Database Locked / SQLITE_BUSY
 
-**Symptom**: `SQLITE_BUSY` errors in logs.
+**Symptom**: `SQLITE_BUSY` errors appear in logs.
 
-**Cause**: SQLite database is being accessed by another process or the WAL checkpoint is blocked.
+**Check**:
+
+```bash
+lsof /root/voicenotebot/streaming-dictation/backend/data/transcripts.db
+```
 
 **Fix**:
 
 ```bash
-# Check if another process has the DB open
-lsof /root/voicenotebot/streaming-dictation/backend/data/transcripts.db
-
-# Restart the service to release locks
 systemctl restart streaming-dictation
 ```
 
-The database uses WAL mode which handles concurrent reads well, but writes are still serialized. Under normal single-user usage, this should not be an issue.
+Under normal single-user use this should be rare, but concurrent access from other processes can still cause problems.
+
+---
+
+## In-Progress Recording Lost After Restart
+
+**Symptom**: A user was recording, the service restarted, and the recording disappeared.
+
+**Explanation**:
+This is expected with the current design. Active recordings are stored in memory until `finish` is called; they are not checkpointed to the database.
 
 ---
 
 ## Service Won't Start
 
-**Symptom**: `systemctl status streaming-dictation` shows failed/inactive.
-
 **Check**:
 
 ```bash
-# View detailed error
 journalctl -u streaming-dictation -n 50 --no-pager
-
-# Check if .env exists
 ls -la /root/voicenotebot/streaming-dictation/backend/.env
-
-# Check if dist/ exists (did build run?)
 ls -la /root/voicenotebot/streaming-dictation/backend/dist/index.js
-
-# Check Node.js version (needs 20+)
 node --version
+```
 
-# Try running manually
+Try running manually:
+
+```bash
 cd /root/voicenotebot/streaming-dictation/backend
 node dist/index.js
 ```
 
 ---
 
-## Port Already in Use
+## Frontend Looks Old After Deploy
 
-**Symptom**: `EADDRINUSE` error on startup.
+**Symptom**: The backend is updated, but the UI still looks outdated or behaves like old code.
+
+**Check**:
+- the deploy script rebuilt the frontend
+- `streaming-dictation/frontend/dist/` contains fresh files
+- the service was restarted after the build
+- browser cache was refreshed
+
+Use the normal deploy script to avoid partial updates:
 
 ```bash
-# Find process using port 3100
-lsof -i :3100
-
-# Kill it
-kill <PID>
-
-# Or change port in .env
-PORT=3101
+bash /root/voicenotebot/streaming-dictation/scripts/deploy.sh
 ```
+
+---
+
+## Backend Lint Fails
+
+**Symptom**: `npm run lint` fails in `streaming-dictation/backend`.
+
+**Current known cause**:
+ESLint v9 expects a flat `eslint.config.*` file, but the backend lint setup has not yet been updated accordingly.
+
+This is a tooling configuration issue, not a runtime failure in the dictation product itself.
