@@ -16,11 +16,11 @@ export interface STTResult {
 export async function streamTranscribe(audioChunks: Buffer[]): Promise<STTResult> {
   const client = getOpenAIClient();
   const audioBuffer = Buffer.concat(audioChunks);
-  const blob = new Blob([new Uint8Array(audioBuffer)], { type: 'audio/webm' });
+  const file = new File([audioBuffer], 'audio.webm', { type: 'audio/webm' });
 
   const response = await client.audio.transcriptions.create({
     model: STT_MODEL,
-    file: blob as unknown as File,
+    file: file,
     response_format: 'text',
   });
 

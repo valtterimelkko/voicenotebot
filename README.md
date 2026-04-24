@@ -163,7 +163,39 @@ Each log entry includes:
 - `transcript_hash`: Hash for easy comparison
 - `was_modified`: Whether Kimi changed the Whisper output
 
-## Quick Start
+## Streaming Dictation
+
+A browser-based PWA for voice-to-text dictation. Access at `dictate.letsautomate.work`.
+
+| Component | Technology | Port | Service |
+|-----------|-----------|------|---------|
+| Backend | Node.js + Express + SQLite | 3100 | `streaming-dictation.service` |
+| Frontend | React + Vite + TypeScript + Tailwind (PWA) | served by backend | — |
+| STT | OpenAI `gpt-4o-mini-transcribe` | — | — |
+| Cleanup | Kimi (`kimi-for-coding`) or OpenAI (`gpt-5-nano`) | — | — |
+| Reverse proxy | Caddy (HTTPS) | 443 | Docker container |
+
+### Common Operations
+
+```bash
+# Service status
+systemctl status streaming-dictation
+
+# Restart
+systemctl restart streaming-dictation
+
+# View logs
+journalctl -u streaming-dictation -f
+
+# Health check
+curl http://localhost:3100/health
+```
+
+See [Streaming Dictation docs](./docs/STREAMING-DICTATION/README.md) for full documentation.
+
+---
+
+## Legacy Telegram Bot — Quick Start
 
 ### Prerequisites
 
