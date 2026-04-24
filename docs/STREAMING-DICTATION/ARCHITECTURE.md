@@ -11,10 +11,26 @@
 | STT | OpenAI `gpt-4o-mini-transcribe` |
 | Cleanup | Kimi (`kimi-for-coding`) or OpenAI (`gpt-5-nano`) |
 | Test | Vitest + supertest |
+| Deployment | systemd behind Caddy |
+
+## System Shape
+
+```text
+Browser PWA
+  -> /auth/* and /api/*
+  -> Express backend
+      -> session auth
+      -> recording lifecycle
+      -> OpenAI STT
+      -> Kimi / OpenAI cleanup
+      -> SQLite transcripts + settings + sessions
+      -> retention cleanup
+  -> built frontend served by the same backend process
+```
 
 ## Data Flow
 
-```
+```text
 Browser Microphone
        │
        ▼
@@ -40,11 +56,12 @@ Browser Microphone
 │  │                                      │  │
 │  │  Audio chunks                        │  │
 │  │     │                                │  │
+│  │     ├─ optional speculative start    │  │
 │  │     ▼                                │  │
 │  │  OpenAI STT (gpt-4o-mini-transcribe) │  │
 │  │     │                                │  │
-│  │     ├─ streamTranscribe (primary)    │  │
-│  │     └─ batchTranscribe (fallback)    │  │
+│  │     ├─ stream path (primary)         │  │
+│  │     └─ batch path (fallback)         │  │
 │  │     │                                │  │
 │  │     ▼                                │  │
 │  │  LLM Cleanup                         │  │
@@ -62,6 +79,63 @@ Browser Microphone
 └─────────────────────────────────────────────┘
 ```
 
+## Core Runtime Behaviour
+
+## Recording lifecycle
+
+1. `POST /api/recordings/start` creates an in-memory active recording.
+2. `POST /api/recordings/:id/stream` appends raw audio chunks.
+3. `POST /api/recordings/:id/finish` finalises the recording, runs STT, runs cleanup, stores the transcript, and returns it.
+
+### Important implication
+
+Active recordings are stored in an in-memory `Map`, not in SQLite. If the backend restarts during a recording, that recording is lost.
+
+## Warmup behaviour
+
+The backend exposes `POST /api/recordings/warmup`.
+
+Purpose:
+- pre-establish external API connections
+- reduce first-request latency
+- make the recording flow feel faster, especially after idle periods
+
+This is a performance optimisation, not a required correctness step.
+
+## Speculative transcription
+
+For recordings that have already accumulated some audio, the backend can begin speculative transcription before `finish` is called.
+
+Why it exists:
+- reduces perceived wait time after the user stops recording
+- overlaps some STT work with the tail end of recording time
+
+It is best understood as a latency optimisation rather than a separate user-facing feature.
+
+## Polling and freshness model
+
+The history UI now uses visibility-aware refresh behaviour.
+
+Current model:
+- the frontend polls while the tab is visible
+- polling pauses when the tab is hidden
+- returning to the tab triggers a refresh
+- `/api/*` responses are served with `Cache-Control: no-store`
+- frontend fetches for history use no-store behaviour to reduce stale results
+
+This is intentionally freshness-first. The app prefers live network reads over cached API data.
+
+## Reverse proxy and session assumptions
+
+The app is intended to run behind Caddy/HTTPS in production.
+
+Important details:
+- `trust proxy` is enabled on the Express app
+- secure cookies depend on correct proxy forwarding and `NODE_ENV=production`
+- remote microphone use requires HTTPS or localhost
+
+If proxy configuration is wrong, authentication may appear broken even when the app itself is working.
+
 ## Database Schema
 
 ### `transcripts`
@@ -78,7 +152,7 @@ Browser Microphone
 | `stt_model` | TEXT | `gpt-4o-mini-transcribe` |
 | `used_fallback` | INTEGER | 1 if batch fallback was used |
 | `duration_ms` | INTEGER | Recording duration in milliseconds |
-| `status` | TEXT | Always `completed` |
+| `status` | TEXT | `completed` |
 
 ### `user_settings`
 
@@ -102,42 +176,17 @@ Used by express-session store:
 
 ## Session Management
 
-- **Library**: express-session with SQLite store
+- **Library**: express-session with SQLite-backed session persistence
 - **Cookie**: httpOnly, secure in production, sameSite=lax
-- **TTL**: 7 days (`sessionTtlMs` in config)
-- **Auth**: bcrypt password comparison, sets `req.session.userId = 'user'`
+- **TTL**: 7 days
+- **Auth model**: single shared password, not multi-user accounts
 
-## Recording Pipeline
+## Cleanup and retention
 
-1. **Start**: Client calls `POST /api/recordings/start`, receives a UUID. Server creates an in-memory `ActiveRecording` with an empty chunk array.
-2. **Stream**: Client sends audio chunks as raw binary (`application/octet-stream`) to `POST /api/recordings/:id/stream`. Each chunk is appended to the in-memory array.
-3. **Finish**: Client calls `POST /api/recordings/:id/finish`. Server:
-   - Concatenates all chunks into a single buffer
-   - Calls `transcribeWithFallback()` (streaming attempt, then batch fallback)
-   - Reads user settings for cleanup model and retention days
-   - Calls `cleanupTranscript()` with the raw text
-   - Computes preview (first 200 chars) and expiry date
-   - Inserts into `transcripts` table
-   - Returns the full transcript row
+- Cleanup uses either Kimi or OpenAI, with the same broad transcript-cleaning intent.
+- Retention cleanup runs on an interval and deletes transcripts past expiry.
+- Retention affects stored transcript history, not active in-memory recordings.
 
-## STT Service
+## PWA note
 
-Primary: `streamTranscribe()` sends WebM audio blob to OpenAI.
-Fallback: `batchTranscribe()` sends the concatenated buffer as a File object.
-Both use model `gpt-4o-mini-transcribe` with `response_format: 'text'`.
-
-## Cleanup Service
-
-Two backends with identical system prompt and temperature (0.3):
-
-- **Kimi**: Direct HTTP to `https://api.kimi.com/coding/v1/chat/completions`, model `kimi-for-coding`, max_tokens 60000, 300s timeout
-- **OpenAI**: Via OpenAI SDK, model `gpt-5-nano`
-
-System prompt instructs: fix spelling/grammar, convert to British spellings, remove fillers, preserve speaker's voice and language.
-
-## Retention
-
-- Runs every 60 minutes via `setInterval`
-- Deletes all transcripts where `expires_at < now`
-- Logs count of deleted rows if any
-- Cleanup interval cleared on `SIGTERM`
+The frontend is installable and precaches static assets, but the app should be thought of as an **installable networked PWA**, not as an offline dictation app.

@@ -1,38 +1,55 @@
 # Operations
 
-## Installation
+## Deployment Model
 
-### Prerequisites
+Streaming Dictation runs as a **systemd-managed Node.js service** and is expected to sit behind **Caddy/HTTPS** in production.
 
-- Node.js 20+ (for `Blob`, `File`, and ESM support)
+The backend serves both:
+- the REST API
+- the built frontend static assets
+
+That means one service on port `3100` is the operational centre of the app.
+
+## Prerequisites
+
+- Node.js 20+
 - npm
+- systemd
+- Caddy or equivalent reverse proxy for HTTPS in production
 
-### First-Time Setup
+## First-Time Setup
+
+### 1) Backend
 
 ```bash
 cd /root/voicenotebot/streaming-dictation/backend
-
-# Install dependencies
 npm install
-
-# Copy and edit environment file
 cp .env.example .env
-# Edit .env with your values (see Environment Variables below)
-
-# Generate a password hash
-node -e "const bcrypt = require('bcrypt'); bcrypt.hash('your-password', 10).then(h => console.log(h))"
-# Paste the output into .env as PASSWORD_HASH=...
-
-# Build TypeScript
-npm run build
-
-# Start the service
-systemctl start streaming-dictation
 ```
 
-### Systemd Setup
+Generate a password hash:
 
-Copy the service file and enable:
+```bash
+node -e "const bcrypt = require('bcrypt'); bcrypt.hash('your-password', 10).then(h => console.log(h))"
+```
+
+Put the output into `.env` as `PASSWORD_HASH=...`.
+
+Then build the backend:
+
+```bash
+npm run build
+```
+
+### 2) Frontend
+
+```bash
+cd /root/voicenotebot/streaming-dictation/frontend
+npm install
+npm run build
+```
+
+### 3) Install the service file
 
 ```bash
 cp /root/voicenotebot/streaming-dictation/systemd/streaming-dictation.service /etc/systemd/system/
@@ -41,70 +58,68 @@ systemctl enable streaming-dictation
 systemctl start streaming-dictation
 ```
 
-## Deployment
+## Routine Deployment
 
-Use the deploy script for routine updates:
+Use the deploy script for normal updates:
 
 ```bash
 bash /root/voicenotebot/streaming-dictation/scripts/deploy.sh
 ```
 
-This script:
-1. Checks for `.env` file
-2. Runs `npm install`
-3. Builds TypeScript (`npm run build`)
-4. Restarts the systemd service
-5. Shows service status and recent logs
-
-Manual deployment:
-
-```bash
-cd /root/voicenotebot/streaming-dictation/backend
-npm install && npm run build
-systemctl restart streaming-dictation
-```
+What it does:
+1. checks that backend `.env` exists
+2. installs backend dependencies
+3. builds backend TypeScript
+4. installs frontend dependencies
+5. builds the frontend bundle
+6. restarts the `streaming-dictation` systemd service
+7. shows recent service status/logs
 
 ## Service Management
 
 ```bash
-# Start
 systemctl start streaming-dictation
-
-# Stop
 systemctl stop streaming-dictation
-
-# Restart
 systemctl restart streaming-dictation
-
-# Check status
 systemctl status streaming-dictation
-
-# Enable on boot
 systemctl enable streaming-dictation
-
-# Disable on boot
 systemctl disable streaming-dictation
 ```
 
 ## Logs
 
 ```bash
-# Follow logs in real-time
 journalctl -u streaming-dictation -f
-
-# Last 100 lines
 journalctl -u streaming-dictation -n 100 --no-pager
-
-# Since yesterday
-journalctl -u streaming-dictation --since yesterday
-
-# Grep for errors
+journalctl -u streaming-dictation --since today
 journalctl -u streaming-dictation | grep -i error
 ```
 
+## Health Checks
+
+```bash
+curl http://localhost:3100/health
+```
+
+Expected shape:
+
+```json
+{"status":"ok","timestamp":"..."}
+```
+
+## Reverse Proxy Notes
+
+Production behaviour depends on correct reverse-proxy setup.
+
+Important points:
+- Express is configured with `trust proxy`
+- secure session cookies depend on HTTPS and correct proxy forwarding
+- microphone access from remote devices requires HTTPS
+- if login appears broken only in production, check the proxy before assuming the app code is wrong
+
 ## Environment Variables
 
-All variables are read from `/root/voicenotebot/streaming-dictation/backend/.env` via the systemd `EnvironmentFile` directive.
+All variables are read from `/root/voicenotebot/streaming-dictation/backend/.env`.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -116,83 +131,102 @@ All variables are read from `/root/voicenotebot/streaming-dictation/backend/.env
 | `KIMI_API_KEY` | Yes | (empty) | Kimi API key |
 | `DEFAULT_CLEANUP_MODEL` | No | `kimi` | `kimi` or `gpt-5-nano` |
 | `RETENTION_DAYS` | No | `14` | Auto-delete transcripts after N days |
-| `DATABASE_PATH` | No | `data/transcripts.db` | SQLite file path (relative to backend/) |
-
-## Retention
-
-Expired transcripts are cleaned up automatically every 60 minutes. The retention period is configurable via:
-
-1. The `RETENTION_DAYS` env var (applied to new recordings)
-2. The `PUT /api/settings` endpoint (updates the stored setting immediately)
-
-The cleanup job runs `DELETE FROM transcripts WHERE expires_at < datetime('now')` and logs the count of deleted rows.
+| `DATABASE_PATH` | No | `data/transcripts.db` | SQLite file path |
 
 ## Database
 
-The SQLite database is stored at `backend/data/transcripts.db` by default. It uses WAL mode for better concurrent read performance.
+Default location:
 
 ```bash
-# Check database size
+/root/voicenotebot/streaming-dictation/backend/data/transcripts.db
+```
+
+Useful checks:
+
+```bash
+# Database file size
 ls -lh /root/voicenotebot/streaming-dictation/backend/data/transcripts.db
 
-# Count transcripts
+# Transcript count
 sqlite3 /root/voicenotebot/streaming-dictation/backend/data/transcripts.db \
   "SELECT COUNT(*) FROM transcripts;"
 
-# Check expired transcripts
+# Expired transcript count
 sqlite3 /root/voicenotebot/streaming-dictation/backend/data/transcripts.db \
   "SELECT COUNT(*) FROM transcripts WHERE expires_at < datetime('now');"
+```
 
-# Backup
+### Backup
+
+```bash
 cp /root/voicenotebot/streaming-dictation/backend/data/transcripts.db \
    /backup/transcripts-$(date +%Y%m%d).db
 ```
 
-## Health Check
+## Retention Behaviour
+
+- Retention applies to saved transcript history.
+- Expired transcripts are deleted automatically on an interval.
+- The retention period can be changed via env or settings API.
+- In-progress recordings are **not** protected by the database; they live in memory until finish.
+
+## Performance Notes
+
+These are now part of normal runtime behaviour:
+- warmup endpoint exists to reduce initial latency
+- speculative transcription may begin before finish for longer recordings
+- API responses are intentionally `no-store`
+- history polling is visibility-aware rather than constant in the background
+
+These are expected behaviours, not bugs.
+
+## Verification Commands
+
+### Backend
 
 ```bash
-curl http://localhost:3100/health
+cd /root/voicenotebot/streaming-dictation/backend
+npm test
+npm run typecheck
+npm run lint
 ```
 
-Returns `{"status":"ok","timestamp":"..."}`.
+### Frontend
+
+```bash
+cd /root/voicenotebot/streaming-dictation/frontend
+npm test
+npm run typecheck
+npm run build
+```
+
+## Current Known Verification Note
+
+At the time of this documentation update:
+- backend tests pass
+- backend typecheck passes
+- frontend tests pass
+- frontend typecheck passes
+- frontend build passes
+- backend lint currently fails because ESLint v9 expects a flat `eslint.config.*` file
+
+Treat that lint issue as a tooling/config task rather than a product runtime failure.
 
 ## File Structure
 
-```
+```text
 streaming-dictation/
 ├── backend/
 │   ├── src/
-│   │   ├── index.ts              # Express app entry point
-│   │   ├── config.ts             # Environment config
-│   │   ├── db.ts                 # SQLite init + schema
-│   │   ├── middleware/
-│   │   │   └── auth.ts           # Session + requireAuth
-│   │   ├── routes/
-│   │   │   ├── auth.ts           # Login/logout/session
-│   │   │   ├── recordings.ts     # Start/stream/finish
-│   │   │   ├── transcripts.ts    # CRUD + search
-│   │   │   ├── settings.ts       # GET/PUT settings
-│   │   │   └── health.ts         # Health check
-│   │   └── services/
-│   │       ├── auth.ts           # bcrypt password verify
-│   │       ├── stt.ts            # OpenAI transcription
-│   │       ├── cleanup.ts        # Kimi/OpenAI cleanup
-│   │       └── retention.ts      # Expired transcript cleanup
 │   ├── tests/
-│   │   ├── setup.ts              # In-memory test DB helper
-│   │   ├── api.test.ts
-│   │   ├── auth.test.ts
-│   │   ├── cleanup.test.ts
-│   │   ├── retention.test.ts
-│   │   ├── settings.test.ts
-│   │   ├── stt.test.ts
-│   │   └── transcripts.test.ts
-│   ├── data/                     # SQLite database (gitignored)
-│   ├── dist/                     # Compiled TypeScript (gitignored)
-│   ├── .env                      # Secrets (gitignored)
+│   ├── data/
+│   ├── .env
 │   ├── .env.example
 │   └── package.json
-├── frontend/                     # React PWA
+├── frontend/
+│   ├── src/
+│   ├── public/
+│   └── package.json
 ├── scripts/
 │   └── deploy.sh
 └── systemd/

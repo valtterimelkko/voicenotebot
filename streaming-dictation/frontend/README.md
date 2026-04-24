@@ -1,73 +1,82 @@
-# React + TypeScript + Vite
+# Streaming Dictation Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + Vite + TypeScript frontend for the Streaming Dictation web app.
 
-Currently, two official plugins are available:
+This is the user-facing PWA shell for:
+- login
+- recording
+- transcript history
+- search
+- settings
+- copy-ready transcript viewing
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+For architecture and operations, see:
+- [`../../docs/STREAMING-DICTATION/README.md`](../../docs/STREAMING-DICTATION/README.md)
+- [`../../docs/STREAMING-DICTATION/FRONTEND.md`](../../docs/STREAMING-DICTATION/FRONTEND.md)
+- [`../../docs/STREAMING-DICTATION/OPERATIONS.md`](../../docs/STREAMING-DICTATION/OPERATIONS.md)
 
-## React Compiler
+## Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- React 18
+- Vite
+- TypeScript
+- Tailwind CSS
+- React Router
+- Zustand
+- vite-plugin-pwa
+- Vitest + Testing Library
 
-## Expanding the ESLint configuration
+## Development Commands
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cd /root/voicenotebot/streaming-dictation/frontend
+npm install
+npm run dev
+npm test
+npm run typecheck
+npm run build
+npm run preview
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Main App Pages
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+| Route | Purpose |
+|---|---|
+| `/login` | Password login |
+| `/` | Record page |
+| `/history` | Transcript history |
+| `/search` | Transcript search |
+| `/settings` | Cleanup model and retention settings |
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Runtime Notes
+
+- The frontend depends on the backend for all auth and transcript APIs.
+- In development, Vite proxies `/auth`, `/api`, and `/health` to the backend.
+- In production, the backend serves the built frontend bundle from `dist/`.
+- History refresh is visibility-aware and freshness-first.
+- The app is installable as a PWA, but it is **not** an offline dictation app.
+
+## Key Source Paths
+
+```text
+src/
+  api/client.ts          API client
+  components/            shared UI pieces
+  hooks/                 frontend hooks (including visibility polling)
+  pages/                 route screens
+  store/                 Zustand state
+  tests/                 frontend test suite
 ```
+
+## Browser/Device Requirements
+
+- microphone support via `getUserMedia`
+- recording support via `MediaRecorder`
+- HTTPS or localhost for microphone access on real devices
+
+## Test / Build Status
+
+Current verified checks from the repo root work include:
+- `npm test` ✅
+- `npm run typecheck` ✅
+- `npm run build` ✅
