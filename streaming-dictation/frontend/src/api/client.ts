@@ -20,6 +20,7 @@ export interface Settings {
 async function apiFetch(path: string, options?: RequestInit): Promise<unknown> {
   const res = await fetch(path, {
     credentials: 'include',
+    cache: 'no-store',
     ...options,
     headers: {
       'Content-Type': 'application/json',
