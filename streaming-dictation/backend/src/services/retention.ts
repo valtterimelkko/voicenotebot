@@ -15,5 +15,5 @@ export function scheduleRetention(db: DB, retentionDays: number): NodeJS.Timeout
     if (deleted > 0) {
       console.log(`retention cleanup: removed ${deleted} expired transcripts`);
     }
-  }, 60 * 60 * 1000);
+  }, 7 * 24 * 60 * 60 * 1000);
 }

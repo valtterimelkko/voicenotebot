@@ -13,7 +13,7 @@ export function settingsRouter(db: DB): Router {
     const row = db.prepare(
       'SELECT default_cleanup_model, retention_days FROM user_settings WHERE id = 1'
     ).get() as SettingsRow | undefined;
-    res.json(row ?? { default_cleanup_model: 'kimi', retention_days: 14 });
+    res.json(row ?? { default_cleanup_model: 'kimi', retention_days: 60 });
   });
 
   router.put('/', (req: Request, res: Response) => {

@@ -131,7 +131,7 @@ describe('E2E: full login → recording → transcript → search → copy flow'
     const getSettingsRes = await agent.get('/api/settings');
     expect(getSettingsRes.status).toBe(200);
     expect(getSettingsRes.body.default_cleanup_model).toBe('gpt-5-nano');
-    expect(getSettingsRes.body.retention_days).toBe(14);
+    expect(getSettingsRes.body.retention_days).toBe(60);
   });
 
   it('warmup endpoint returns ok when authenticated', async () => {

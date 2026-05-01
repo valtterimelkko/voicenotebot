@@ -64,7 +64,7 @@ describe('API integration', () => {
     const res = await agent.get('/api/settings');
     expect(res.status).toBe(200);
     expect(res.body.default_cleanup_model).toBe('kimi');
-    expect(res.body.retention_days).toBe(14);
+    expect(res.body.retention_days).toBe(60);
   });
 
   it('login then update settings persists across requests', async () => {
