@@ -18,7 +18,7 @@ vi.mock('openai', () => ({
   })),
 }));
 
-import { cleanupTranscript } from '../src/services/cleanup';
+import { cleanupTranscript, applyBritishSpelling } from '../src/services/cleanup';
 import { resetForTesting } from '../src/services/connectionPool';
 
 describe('cleanupTranscript with kimi', () => {
@@ -161,5 +161,53 @@ describe('cleanupTranscript with gpt-5-nano', () => {
 
     const result = await cleanupTranscript('raw text fallback', 'gpt-5-nano');
     expect(result.cleanedText).toBe('raw text fallback');
+  });
+});
+
+describe('applyBritishSpelling', () => {
+  it('converts -ize to -ise', () => {
+    expect(applyBritishSpelling('I realize this is important')).toBe('I realise this is important');
+    expect(applyBritishSpelling('We need to organize the meeting')).toBe('We need to organise the meeting');
+    expect(applyBritishSpelling('Please summarize the report')).toBe('Please summarise the report');
+  });
+
+  it('converts -ized to -ised', () => {
+    expect(applyBritishSpelling('He optimized the code')).toBe('He optimised the code');
+    expect(applyBritishSpelling('They finalized the deal')).toBe('They finalised the deal');
+    expect(applyBritishSpelling('It was overemphasized')).toBe('It was overemphasised');
+  });
+
+  it('converts -izing to -ising', () => {
+    expect(applyBritishSpelling('I am realizing my potential')).toBe('I am realising my potential');
+    expect(applyBritishSpelling('She is optimizing the process')).toBe('She is optimising the process');
+  });
+
+  it('converts -ization to -isation', () => {
+    expect(applyBritishSpelling('The optimization of the system')).toBe('The optimisation of the system');
+    expect(applyBritishSpelling('The realization of our goals')).toBe('The realisation of our goals');
+    expect(applyBritishSpelling('The organization of the event')).toBe('The organisation of the event');
+  });
+
+  it('preserves -ize exceptions', () => {
+    expect(applyBritishSpelling('The file size is large')).toBe('The file size is large');
+    expect(applyBritishSpelling('Police seize the assets')).toBe('Police seize the assets');
+    expect(applyBritishSpelling('The boat may capsize')).toBe('The boat may capsize');
+  });
+
+  it('preserves words already in British spelling', () => {
+    expect(applyBritishSpelling('I realise this is important')).toBe('I realise this is important');
+    expect(applyBritishSpelling('We need to organise the meeting')).toBe('We need to organise the meeting');
+  });
+
+  it('handles multiple conversions in one text', () => {
+    const input = 'We must optimize and realize that summarizing is key. He finalized it.';
+    const expected = 'We must optimise and realise that summarising is key. He finalised it.';
+    expect(applyBritishSpelling(input)).toBe(expected);
+  });
+
+  it('preserves case of surrounding letters', () => {
+    expect(applyBritishSpelling('Realize')).toBe('Realise');
+    expect(applyBritishSpelling('Optimized')).toBe('Optimised');
+    expect(applyBritishSpelling('ORGANIZATION')).toBe('ORGANISATION');
   });
 });

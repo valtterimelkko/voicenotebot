@@ -17,7 +17,7 @@ describe('settings routes', () => {
     const res = await request(app).get('/api/settings');
     expect(res.status).toBe(200);
     expect(res.body.default_cleanup_model).toBe('kimi');
-    expect(res.body.retention_days).toBe(14);
+    expect(res.body.retention_days).toBe(60);
   });
 
   it('PUT / updates cleanup model', async () => {
@@ -26,7 +26,7 @@ describe('settings routes', () => {
       .send({ default_cleanup_model: 'gpt-5-nano' });
     expect(res.status).toBe(200);
     expect(res.body.default_cleanup_model).toBe('gpt-5-nano');
-    expect(res.body.retention_days).toBe(14);
+    expect(res.body.retention_days).toBe(60);
   });
 
   it('PUT / updates retention days', async () => {
@@ -52,7 +52,7 @@ describe('settings routes', () => {
       .put('/api/settings')
       .send({ retention_days: 'not a number' });
     expect(res.status).toBe(200);
-    expect(res.body.retention_days).toBe(14);
+    expect(res.body.retention_days).toBe(60);
   });
 
   it('PUT / ignores invalid cleanup_model type', async () => {
@@ -69,7 +69,7 @@ describe('settings routes', () => {
       .send({});
     expect(res.status).toBe(200);
     expect(res.body.default_cleanup_model).toBe('kimi');
-    expect(res.body.retention_days).toBe(14);
+    expect(res.body.retention_days).toBe(60);
   });
 
   it('persists settings across requests', async () => {

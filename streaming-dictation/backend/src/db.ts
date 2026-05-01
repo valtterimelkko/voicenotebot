@@ -39,10 +39,10 @@ export function initDatabase(dbPath: string): Database.Database {
     CREATE TABLE IF NOT EXISTS user_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       default_cleanup_model TEXT NOT NULL DEFAULT 'kimi',
-      retention_days INTEGER NOT NULL DEFAULT 14
+      retention_days INTEGER NOT NULL DEFAULT 60
     );
 
-    INSERT OR IGNORE INTO user_settings (id, default_cleanup_model, retention_days) VALUES (1, 'kimi', 14);
+    INSERT OR IGNORE INTO user_settings (id, default_cleanup_model, retention_days) VALUES (1, 'kimi', 60);
   `);
 
   return db;
