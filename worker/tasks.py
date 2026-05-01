@@ -254,30 +254,45 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
             _run_async(telegram_client.send_message(chat_id=chat_id, text=ERROR_FILE_TOO_LARGE))
             return {"success": False, "error": "file_too_large"}
         
-        # Step 4: Transcribe (OpenAI primary, Whisper fallback)
+        # Step 4: Transcribe (Whisper primary, OpenAI fallback)
         transcript = None
         transcription_source = None
 
-        # Try OpenAI first if configured
-        if TRANSCRIPTION_PROVIDER == "openai" and OPENAI_API_KEY:
+        # Try Whisper first (local, works even if OpenAI is down)
+        try:
+            logger.debug("Sending to Whisper for transcription")
+            transcript = _transcribe_with_whisper(temp_file_path)
+            transcription_source = "whisper"
+            logger.info(
+                "Whisper transcription successful",
+                transcript_length=len(transcript),
+            )
+        except Exception as e:
+            logger.warning(
+                "Whisper transcription failed, will fallback to OpenAI",
+                error=str(e),
+            )
+
+        # Fallback to OpenAI if Whisper failed and API key is available
+        if not transcript and OPENAI_API_KEY:
             try:
-                logger.debug("Sending to OpenAI for transcription")
+                logger.debug("Sending to OpenAI for transcription (fallback)")
                 openai_client = OpenAITranscriptionClient()
                 transcript = openai_client.transcribe(temp_file_path)
                 transcription_source = "openai"
                 logger.info(
-                    "OpenAI transcription successful",
+                    "OpenAI fallback transcription successful",
                     transcript_length=len(transcript),
                 )
             except OpenAITranscriptionError as e:
                 logger.warning(
-                    "OpenAI transcription failed, will fallback to Whisper",
+                    "OpenAI fallback also failed",
                     error=str(e),
                     error_code=e.error_code,
                 )
             except Exception as e:
                 logger.warning(
-                    "OpenAI transcription failed unexpectedly, will fallback to Whisper",
+                    "OpenAI fallback also failed unexpectedly",
                     error=str(e),
                 )
             finally:
@@ -285,12 +300,6 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
                     openai_client.close()
                 except Exception:
                     pass
-
-        # Fallback to Whisper if OpenAI failed or not configured
-        if not transcript:
-            logger.debug("Sending to Whisper for transcription")
-            transcript = _transcribe_with_whisper(temp_file_path)
-            transcription_source = "whisper"
 
         if not transcript:
             logger.error("Transcription returned empty from all providers")

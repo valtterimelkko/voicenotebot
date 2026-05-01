@@ -73,7 +73,7 @@ Legacy Telegram Bot (backup)
     -> FastAPI webhook
     -> Redis queue
     -> RQ workers
-    -> Whisper / OpenAI-style transcription + Kimi cleanup
+    -> Whisper primary / OpenAI fallback transcription + Kimi cleanup
     -> Docker Compose
 ```
 
@@ -266,8 +266,9 @@ docker logs -f voicenotebot-worker-2
 
 ## Legacy Notes
 
-- The legacy bot remains useful as a fallback path.
+- The legacy bot uses **local Whisper as primary** and **OpenAI API as fallback**.
 - Whisper access is guarded with a Redis-based distributed lock to reduce contention.
+- The `TRANSCRIPTION_PROVIDER` env var controls explicit preference (`whisper` or `openai`).
 - Some legacy Python test/docs surfaces may need refresh before being treated as authoritative current coverage.
 
 ---
