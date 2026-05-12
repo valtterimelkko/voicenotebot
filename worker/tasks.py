@@ -2,7 +2,7 @@
 VoiceNote Bot Worker Tasks
 
 RQ worker tasks for processing voice note transcription:
-download → whisper → kimi → send result
+download → whisper → openrouter (GPT-5 nano) → send result
 """
 
 import asyncio
@@ -19,7 +19,7 @@ import structlog
 # Add parent directory to path for shared imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from shared import get_logger, TelegramClient, KimiClient, KimiError, OpenAITranscriptionClient, OpenAITranscriptionError
+from shared import get_logger, TelegramClient, OpenRouterClient, OpenRouterError, OpenAITranscriptionClient, OpenAITranscriptionError
 
 # Configure logging
 logger = get_logger(__name__)
@@ -151,7 +151,7 @@ ERROR_FILE_TOO_LARGE = (
 ERROR_WHISPER_FAILED = (
     "❌ Transcription failed. The audio may be corrupted or too long. Please try again."
 )
-ERROR_KIMI_TOKEN_LIMIT = (
+ERROR_CLEANUP_TOKEN_LIMIT = (
     "❌ Voice note too long (max ~5 minutes). Please try a shorter voice note."
 )
 ERROR_GENERAL = "❌ Transcription failed. Please try again."
@@ -204,12 +204,12 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
     
     temp_file_path = None
     telegram_client = None
-    kimi_client = None
+    cleanup_client = None
     
     try:
         # Initialize clients
         telegram_client = TelegramClient(token=TELEGRAM_BOT_TOKEN)
-        kimi_client = KimiClient()
+        cleanup_client = OpenRouterClient()
         
         # Step 1: Get file info from Telegram
         logger.debug("Getting file info from Telegram", file_id=file_id)
@@ -315,25 +315,25 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
             transcript_hash=hash(transcript) & 0xFFFFFFFF,
         )
         
-        # Step 5: Clean up with Kimi API
-        logger.debug("Sending to Kimi for cleanup")
+        # Step 5: Clean up with OpenRouter GPT-5 nano
+        logger.debug("Sending to OpenRouter for cleanup")
         try:
-            cleaned_text = _run_async(kimi_client.cleanup_transcript(transcript))
-        except KimiError as e:
+            cleaned_text = _run_async(cleanup_client.cleanup_transcript(transcript))
+        except OpenRouterError as e:
             error_str = str(e).lower()
             if "token" in error_str or "length" in error_str or "too long" in error_str:
-                logger.warning("Kimi token limit exceeded")
-                _run_async(telegram_client.send_message(chat_id=chat_id, text=ERROR_KIMI_TOKEN_LIMIT))
+                logger.warning("OpenRouter token limit exceeded")
+                _run_async(telegram_client.send_message(chat_id=chat_id, text=ERROR_CLEANUP_TOKEN_LIMIT))
                 raise
             raise
         
         if not cleaned_text:
-            logger.warning("Kimi cleanup returned empty, using raw transcript")
+            logger.warning("OpenRouter cleanup returned empty, using raw transcript")
             cleaned_text = transcript
         
-        # 🔍 Log Kimi output for comparison with Whisper
+        # 🔍 Log OpenRouter output for comparison with Whisper
         logger.info(
-            "Kimi cleanup complete - RAW OUTPUT",
+            "OpenRouter cleanup complete - RAW OUTPUT",
             cleaned_length=len(cleaned_text),
             cleaned_preview=cleaned_text[:500] if len(cleaned_text) > 500 else cleaned_text,
             cleaned_hash=hash(cleaned_text) & 0xFFFFFFFF,
@@ -350,7 +350,7 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
             transcript_length=len(transcript),
             cleaned_length=len(cleaned_text),
             raw_preview=transcript[:200] if len(transcript) > 200 else transcript,
-            kimi_preview=cleaned_text[:200] if len(cleaned_text) > 200 else cleaned_text,
+            cleanup_preview=cleaned_text[:200] if len(cleaned_text) > 200 else cleaned_text,
         )
 
         return {
@@ -384,9 +384,9 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
                 _run_async(telegram_client.close())
             except Exception:
                 pass
-        if kimi_client:
+        if cleanup_client:
             try:
-                _run_async(kimi_client.close())
+                _run_async(cleanup_client.close())
             except Exception:
                 pass
         
@@ -524,12 +524,12 @@ def _get_error_message_for_exception(e: Exception) -> str:
     
     # Check for token limit errors
     if "token_limit_exceeded" in error_str:
-        return ERROR_KIMI_TOKEN_LIMIT
+        return ERROR_CLEANUP_TOKEN_LIMIT
     
-    # Check for Kimi errors related to token limits
-    if isinstance(e, KimiError):
+    # Check for OpenRouter errors related to token limits
+    if isinstance(e, OpenRouterError):
         if "token" in error_str or "too long" in error_str or e.error_code == 413:
-            return ERROR_KIMI_TOKEN_LIMIT
+            return ERROR_CLEANUP_TOKEN_LIMIT
     
     # Check for whisper-related errors
     if "whisper" in error_str:
