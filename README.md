@@ -52,7 +52,7 @@ It provides:
 - worker-based transcription pipeline
 - Telegram file download + response send-back
 - local Whisper/OpenAI-style transcription flow
-- Kimi cleanup
+- OpenRouter GPT-5 nano cleanup
 - Docker Compose-based deployment
 
 ---
@@ -73,7 +73,7 @@ Legacy Telegram Bot (backup)
     -> FastAPI webhook
     -> Redis queue
     -> RQ workers
-    -> Whisper primary / OpenAI fallback transcription + Kimi cleanup
+    -> Whisper primary / OpenAI fallback transcription + OpenRouter GPT-5 nano cleanup
     -> Docker Compose
 ```
 
@@ -206,7 +206,7 @@ Telegram
   -> Redis queue
   -> RQ workers
   -> Whisper / OpenAI-style transcription path
-  -> Kimi cleanup
+  -> OpenRouter GPT-5 nano cleanup
   -> Telegram reply
 ```
 
@@ -217,7 +217,7 @@ Telegram
 | Webhook | FastAPI + Uvicorn | Receives Telegram updates, enqueues jobs | `webhook/` |
 | Worker | Python + RQ | Processes voice notes | `worker/` |
 | Queue | Redis | Job queue management | Docker container |
-| Shared | Python modules | Telegram client, Kimi client, logging | `shared/` |
+| Shared | Python modules | Telegram client, OpenRouter client, logging | `shared/` |
 
 ## Legacy Quick Start
 
@@ -225,7 +225,7 @@ Telegram
 
 - Docker & Docker Compose
 - Telegram bot token
-- Kimi API key
+- OpenRouter API key
 - Whisper service available at `/root/whisper/`
 
 ### Configure
@@ -239,7 +239,7 @@ Fill in at least:
 
 ```bash
 TELEGRAM_BOT_TOKEN=your_token_here
-KIMI_API_KEY=your_key_here
+OPENROUTER_API_KEY=your_key_here
 ```
 
 ### Run
@@ -267,6 +267,7 @@ docker logs -f voicenotebot-worker-2
 ## Legacy Notes
 
 - The legacy bot uses **local Whisper as primary** and **OpenAI API as fallback**.
+- Transcript cleanup uses **OpenRouter GPT-5 nano**, which routes across multiple inference providers (OpenAI, Azure, etc.) for resilience.
 - Whisper access is guarded with a Redis-based distributed lock to reduce contention.
 - The `TRANSCRIPTION_PROVIDER` env var controls explicit preference (`whisper` or `openai`).
 - Some legacy Python test/docs surfaces may need refresh before being treated as authoritative current coverage.
