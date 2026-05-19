@@ -34,7 +34,8 @@ const mockTranscript: Transcript = {
 
 const mockSettings: Settings = {
   default_cleanup_model: 'kimi',
-  retention_days: 14
+  retention_days: 14,
+  stt_vocabulary: ''
 }
 
 describe('HistoryPage', () => {

@@ -118,6 +118,22 @@ describe('cleanupTranscript with kimi', () => {
 
     await expect(cleanupTranscript('raw', 'kimi')).rejects.toThrow('Kimi HTTP 500');
   });
+
+  it('appends vocabulary to system prompt when provided', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        choices: [{ message: { content: 'cleaned' } }],
+      }),
+    });
+
+    await cleanupTranscript('raw', 'kimi', 'Claude\nAnthropic');
+
+    const callArgs = mockFetch.mock.calls[0];
+    const body = JSON.parse(callArgs[1].body);
+    expect(body.messages[0].content).toContain('Claude');
+    expect(body.messages[0].content).toContain('Anthropic');
+  });
 });
 
 describe('cleanupTranscript with gpt-5-nano', () => {
@@ -161,6 +177,18 @@ describe('cleanupTranscript with gpt-5-nano', () => {
 
     const result = await cleanupTranscript('raw text fallback', 'gpt-5-nano');
     expect(result.cleanedText).toBe('raw text fallback');
+  });
+
+  it('appends vocabulary to system prompt when provided', async () => {
+    mockChatCreate.mockResolvedValue({
+      choices: [{ message: { content: 'cleaned' } }],
+    });
+
+    await cleanupTranscript('raw', 'gpt-5-nano', 'Claude\nAnthropic');
+
+    const callArgs = mockChatCreate.mock.calls[0][0];
+    expect(callArgs.messages[0].content).toContain('Claude');
+    expect(callArgs.messages[0].content).toContain('Anthropic');
   });
 });
 

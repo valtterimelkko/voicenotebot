@@ -43,6 +43,25 @@ describe('streamTranscribe', () => {
     expect(callArgs.model).toBe('gpt-4o-mini-transcribe');
     expect(callArgs.response_format).toBe('text');
   });
+
+  it('passes prompt when provided', async () => {
+    mockTranscriptionCreate.mockResolvedValue('text with prompt');
+
+    await streamTranscribe([Buffer.from('chunk1')], 'Claude, Anthropic');
+
+    expect(mockTranscriptionCreate).toHaveBeenCalledTimes(1);
+    const callArgs = mockTranscriptionCreate.mock.calls[0][0];
+    expect(callArgs.prompt).toBe('Claude, Anthropic');
+  });
+
+  it('does not include prompt key when undefined', async () => {
+    mockTranscriptionCreate.mockResolvedValue('text');
+
+    await streamTranscribe([Buffer.from('chunk1')]);
+
+    const callArgs = mockTranscriptionCreate.mock.calls[0][0];
+    expect(callArgs).not.toHaveProperty('prompt');
+  });
 });
 
 describe('batchTranscribe', () => {

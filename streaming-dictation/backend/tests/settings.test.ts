@@ -18,6 +18,7 @@ describe('settings routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.default_cleanup_model).toBe('kimi');
     expect(res.body.retention_days).toBe(60);
+    expect(res.body.stt_vocabulary).toBe('');
   });
 
   it('PUT / updates cleanup model', async () => {
@@ -27,6 +28,7 @@ describe('settings routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.default_cleanup_model).toBe('gpt-5-nano');
     expect(res.body.retention_days).toBe(60);
+    expect(res.body.stt_vocabulary).toBe('');
   });
 
   it('PUT / updates retention days', async () => {
@@ -36,6 +38,7 @@ describe('settings routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.retention_days).toBe(30);
     expect(res.body.default_cleanup_model).toBe('kimi');
+    expect(res.body.stt_vocabulary).toBe('');
   });
 
   it('PUT / updates both fields at once', async () => {
@@ -45,6 +48,7 @@ describe('settings routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.default_cleanup_model).toBe('gpt-5-nano');
     expect(res.body.retention_days).toBe(7);
+    expect(res.body.stt_vocabulary).toBe('');
   });
 
   it('PUT / ignores invalid retention_days type', async () => {
@@ -70,6 +74,25 @@ describe('settings routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.default_cleanup_model).toBe('kimi');
     expect(res.body.retention_days).toBe(60);
+    expect(res.body.stt_vocabulary).toBe('');
+  });
+
+  it('PUT / updates stt_vocabulary', async () => {
+    const res = await request(app)
+      .put('/api/settings')
+      .send({ stt_vocabulary: 'Claude\nAnthropic' });
+    expect(res.status).toBe(200);
+    expect(res.body.stt_vocabulary).toBe('Claude\nAnthropic');
+    expect(res.body.default_cleanup_model).toBe('kimi');
+    expect(res.body.retention_days).toBe(60);
+  });
+
+  it('PUT / ignores invalid stt_vocabulary type', async () => {
+    const res = await request(app)
+      .put('/api/settings')
+      .send({ stt_vocabulary: 123 });
+    expect(res.status).toBe(200);
+    expect(res.body.stt_vocabulary).toBe('');
   });
 
   it('persists settings across requests', async () => {
@@ -79,5 +102,14 @@ describe('settings routes', () => {
 
     const res = await request(app).get('/api/settings');
     expect(res.body.retention_days).toBe(21);
+  });
+
+  it('persists stt_vocabulary across requests', async () => {
+    await request(app)
+      .put('/api/settings')
+      .send({ stt_vocabulary: 'Claude' });
+
+    const res = await request(app).get('/api/settings');
+    expect(res.body.stt_vocabulary).toBe('Claude');
   });
 });

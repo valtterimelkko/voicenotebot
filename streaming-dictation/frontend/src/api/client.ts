@@ -15,6 +15,7 @@ export interface Transcript {
 export interface Settings {
   default_cleanup_model: string
   retention_days: number
+  stt_vocabulary: string
 }
 
 async function apiFetch(path: string, options?: RequestInit): Promise<unknown> {

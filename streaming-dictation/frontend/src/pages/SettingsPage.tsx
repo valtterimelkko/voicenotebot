@@ -44,6 +44,24 @@ export function SettingsPage() {
     }
   }
 
+  const handleVocabularySave = async () => {
+    if (!settings || saving) return
+    setSaving(true)
+    setSaved(false)
+    setError('')
+    try {
+      const updated = await api.updateSettings({ stt_vocabulary: settings.stt_vocabulary })
+      setSettingsLocal(updated)
+      setStore(updated)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2500)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to save settings')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex justify-center py-16" aria-live="polite">
@@ -112,6 +130,40 @@ export function SettingsPage() {
           )}
         </div>
       </section>
+
+      {/* STT Vocabulary */}
+      {settings && (
+        <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-700">STT vocabulary</h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Words and phrases the transcriber should know. One per line.
+            </p>
+          </div>
+          <textarea
+            value={settings.stt_vocabulary}
+            onChange={(e) => {
+              setSettingsLocal({ ...settings, stt_vocabulary: e.target.value })
+            }}
+            disabled={saving}
+            rows={5}
+            className="w-full text-sm border border-slate-200 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:opacity-50 resize-y"
+            placeholder="Claude&#10;Anthropic&#10;Kubernetes&#10;..."
+          />
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-slate-400">
+              {(settings.stt_vocabulary ?? '').length}/500 characters
+            </p>
+            <button
+              onClick={() => void handleVocabularySave()}
+              disabled={saving}
+              className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            >
+              Save vocabulary
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* Retention info */}
       {settings && (

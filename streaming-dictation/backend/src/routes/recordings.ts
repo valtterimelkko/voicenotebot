@@ -18,6 +18,7 @@ const SPECULATIVE_DELAY_MS = 3_000;
 interface SettingsRow {
   default_cleanup_model: string;
   retention_days: number;
+  stt_vocabulary: string;
 }
 
 export function recordingsRouter(db: DB): Router {
@@ -37,10 +38,15 @@ export function recordingsRouter(db: DB): Router {
     };
     activeRecordings.set(id, recording);
 
+    const settings = db.prepare(
+      'SELECT stt_vocabulary FROM user_settings WHERE id = 1'
+    ).get() as { stt_vocabulary: string } | undefined;
+    const sttVocabulary = settings?.stt_vocabulary ?? '';
+
     const specTimer = setTimeout(() => {
       const rec = activeRecordings.get(id);
       if (rec && rec.chunks.length > 0 && !rec.speculative) {
-        rec.speculative = startSpeculativeTranscription(rec.chunks);
+        rec.speculative = startSpeculativeTranscription(rec.chunks, sttVocabulary);
       }
     }, SPECULATIVE_DELAY_MS);
     specTimer.unref();
@@ -71,6 +77,14 @@ export function recordingsRouter(db: DB): Router {
 
     const durationMs = Date.now() - recording.startedAt;
 
+    const settings = db.prepare(
+      'SELECT default_cleanup_model, retention_days, stt_vocabulary FROM user_settings WHERE id = 1'
+    ).get() as SettingsRow;
+
+    const cleanupModel = settings.default_cleanup_model as 'kimi' | 'gpt-5-nano';
+    const retentionDays = settings.retention_days;
+    const sttVocabulary = settings.stt_vocabulary;
+
     let rawText = '';
     let sttModel = '';
     let usedFallback = 0;
@@ -84,7 +98,7 @@ export function recordingsRouter(db: DB): Router {
       if (hasSpeculative && recording.speculative) {
         sttResult = await recording.speculative.promise;
       } else {
-        sttResult = await transcribeWithFallback(recording.chunks);
+        sttResult = await transcribeWithFallback(recording.chunks, sttVocabulary);
       }
       rawText = sttResult.text;
       sttModel = sttResult.model;
@@ -93,17 +107,10 @@ export function recordingsRouter(db: DB): Router {
       rawText = '';
     }
 
-    const settings = db.prepare(
-      'SELECT default_cleanup_model, retention_days FROM user_settings WHERE id = 1'
-    ).get() as SettingsRow;
-
-    const cleanupModel = settings.default_cleanup_model as 'kimi' | 'gpt-5-nano';
-    const retentionDays = settings.retention_days;
-
     let cleanedText = rawText;
     if (rawText) {
       try {
-        const cleanupResult = await cleanupTranscript(rawText, cleanupModel);
+        const cleanupResult = await cleanupTranscript(rawText, cleanupModel, sttVocabulary);
         cleanedText = cleanupResult.cleanedText;
       } catch {
         cleanedText = rawText;
