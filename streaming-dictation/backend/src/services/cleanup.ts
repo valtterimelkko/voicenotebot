@@ -39,14 +39,21 @@ export interface CleanupResult {
   model: CleanupModel;
 }
 
-export async function cleanupTranscript(rawText: string, model: CleanupModel): Promise<CleanupResult> {
-  if (model === 'kimi') {
-    return cleanupWithKimi(rawText);
+function buildSystemPrompt(vocabulary?: string): string {
+  if (!vocabulary || vocabulary.trim().length === 0) {
+    return SYSTEM_PROMPT;
   }
-  return cleanupWithOpenAI(rawText);
+  return `${SYSTEM_PROMPT}\n\nAdditional context — the speaker uses these terms frequently. When a phonetically similar word appears in a context where the technical term is clearly intended, prefer the technical term:\n${vocabulary.trim()}`;
 }
 
-async function cleanupWithKimi(transcriptText: string): Promise<CleanupResult> {
+export async function cleanupTranscript(rawText: string, model: CleanupModel, vocabulary?: string): Promise<CleanupResult> {
+  if (model === 'kimi') {
+    return cleanupWithKimi(rawText, vocabulary);
+  }
+  return cleanupWithOpenAI(rawText, vocabulary);
+}
+
+async function cleanupWithKimi(transcriptText: string, vocabulary?: string): Promise<CleanupResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 300000);
 
@@ -60,7 +67,7 @@ async function cleanupWithKimi(transcriptText: string): Promise<CleanupResult> {
       },
       body: JSON.stringify({
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: buildSystemPrompt(vocabulary) },
           { role: 'user', content: `Clean up this transcript:\n\n${transcriptText}` },
         ],
         model: KIMI_MODEL,
@@ -87,13 +94,13 @@ async function cleanupWithKimi(transcriptText: string): Promise<CleanupResult> {
   }
 }
 
-async function cleanupWithOpenAI(transcriptText: string): Promise<CleanupResult> {
+async function cleanupWithOpenAI(transcriptText: string, vocabulary?: string): Promise<CleanupResult> {
   const client = getSharedOpenAIClient();
 
   const response = await client.chat.completions.create({
     model: OPENAI_CLEANUP_MODEL,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: buildSystemPrompt(vocabulary) },
       { role: 'user', content: `Clean up this transcript:\n\n${transcriptText}` },
     ],
     temperature: 0.3,

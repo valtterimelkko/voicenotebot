@@ -4,6 +4,7 @@ import { DB } from '../db';
 interface SettingsRow {
   default_cleanup_model: string;
   retention_days: number;
+  stt_vocabulary: string;
 }
 
 export function settingsRouter(db: DB): Router {
@@ -11,13 +12,13 @@ export function settingsRouter(db: DB): Router {
 
   router.get('/', (_req: Request, res: Response) => {
     const row = db.prepare(
-      'SELECT default_cleanup_model, retention_days FROM user_settings WHERE id = 1'
+      'SELECT default_cleanup_model, retention_days, stt_vocabulary FROM user_settings WHERE id = 1'
     ).get() as SettingsRow | undefined;
-    res.json(row ?? { default_cleanup_model: 'kimi', retention_days: 60 });
+    res.json(row ?? { default_cleanup_model: 'kimi', retention_days: 60, stt_vocabulary: '' });
   });
 
   router.put('/', (req: Request, res: Response) => {
-    const { default_cleanup_model, retention_days } = req.body;
+    const { default_cleanup_model, retention_days, stt_vocabulary } = req.body;
     const updates: string[] = [];
     const values: unknown[] = [];
 
@@ -29,6 +30,10 @@ export function settingsRouter(db: DB): Router {
       updates.push('retention_days = ?');
       values.push(retention_days);
     }
+    if (stt_vocabulary !== undefined && typeof stt_vocabulary === 'string') {
+      updates.push('stt_vocabulary = ?');
+      values.push(stt_vocabulary);
+    }
 
     if (updates.length > 0) {
       db.prepare(
@@ -37,7 +42,7 @@ export function settingsRouter(db: DB): Router {
     }
 
     const row = db.prepare(
-      'SELECT default_cleanup_model, retention_days FROM user_settings WHERE id = 1'
+      'SELECT default_cleanup_model, retention_days, stt_vocabulary FROM user_settings WHERE id = 1'
     ).get() as SettingsRow;
     res.json(row);
   });
