@@ -1,286 +1,154 @@
 # VoiceNote Bot
 
-This repository now contains **two related voice-to-text systems**:
+VoiceNote Bot is a self-hosted dictation project built for people who work with AI on the move.
 
-1. **Streaming Dictation** — the primary current product: a browser-based dictation PWA with session auth, transcript history, search, settings, retention, and AI cleanup.
-2. **Legacy Telegram Bot** — the original queue-based Telegram voice-note bot, still kept working as a backup path.
+It contains two related systems:
 
-## Start Here
+1. **Streaming Dictation** — the current browser-based PWA for fast dictation across phone and laptop
+2. **Legacy Telegram Bot** — the original queue-based voice-note transcription bot, still kept as a useful fallback path
 
-- **Quick agent/developer guide:** [`AGENTS.md`](./AGENTS.md)
-- **Streaming Dictation docs:** [`docs/STREAMING-DICTATION/README.md`](./docs/STREAMING-DICTATION/README.md)
-- **Streaming Dictation operations:** [`docs/STREAMING-DICTATION/OPERATIONS.md`](./docs/STREAMING-DICTATION/OPERATIONS.md)
-- **Streaming Dictation testing:** [`docs/STREAMING-DICTATION/TESTING.md`](./docs/STREAMING-DICTATION/TESTING.md)
-- **Implementation plan:** [`STREAMING-DICTATION-PLAN.md`](./STREAMING-DICTATION-PLAN.md)
-- **Architecture research:** [`RESEARCH-FINDINGS.md`](./RESEARCH-FINDINGS.md)
+## Why this exists
 
----
+This project started from a very practical need: dictating to AI coding agents and LLMs is often much faster than typing.
 
-## Current Status
+I found myself doing more and more voice-driven work, but I did not want to depend entirely on paid dictation services. I also wanted something that fit a different working pattern from desktop-only tools: I move around a lot, I often interact with agents from my phone, and I wanted a dictation workflow that worked well in a mobile browser as well as on a laptop.
+
+That is what led to VoiceNote Bot.
+
+The first version was the **Telegram bot**. It solved the basic problem well: send a voice note, let a queue-backed service transcribe it, clean it up, and send text back. That version is still useful, especially when absolute speed is not the top priority and when a resilient asynchronous workflow is preferable.
+
+The later version, **Streaming Dictation**, became the main product. It was inspired in part by [OpenWhispr](https://openwhispr.com/) / [openwhispr on GitHub](https://github.com/openwhispr/openwhispr), which deserves explicit credit here. That project helped demonstrate how much better dictation feels when audio starts moving through the system while you are still speaking rather than only after a full recording upload.
+
+VoiceNote Bot takes that broader idea into a different use case:
+
+- browser-first rather than desktop-app-first
+- phone-friendly rather than single-machine-first
+- self-hosted and easy to adapt
+- useful for people who copy, review, and lightly edit text before sending it into AI tools
+
+That last point matters. This is not trying to eliminate copy-paste at all costs. In practice, many AI workflows benefit from a short review/edit step before the text is sent onward.
+
+## Who this is for
+
+VoiceNote Bot is especially suited to people who:
+
+- work with AI agents from both laptop and phone
+- want a dictation workflow in the browser
+- prefer self-hosting over subscriptions
+- want a system they can fork and tune for their own language, cleanup rules, or prompting style
+- value resilience across providers rather than depending on one vendor path
+
+It may be less ideal for users who stay on one machine all day and want the tightest possible OS-level desktop insertion workflow. There are other excellent tools for that. This repo is strongest when portability and cross-device access matter.
+
+## How the two systems differ
 
 ### Streaming Dictation
 
-The new streaming dictation system is now a fully operational single-user web app/PWA.
+The browser app is the primary current product.
 
-Implemented today:
-- password login + session cookie auth
-- browser microphone capture via `MediaRecorder`
-- recording lifecycle: `start` → `stream` → `finish`
-- OpenAI STT with fallback handling
-- cleanup via **Kimi** or **OpenAI `gpt-5-nano`**
-- transcript history, search, copy, and settings
-- SQLite persistence with retention cleanup
-- warmup endpoint for lower-latency requests
-- speculative transcription for faster finish-time results
-- visibility-aware polling for history refresh
-- `no-store` API caching to avoid stale history results
-- systemd service + deploy script
-- installable PWA shell
+It is designed for lower-latency dictation by warming up the transcription path and streaming audio during the recording lifecycle. It also adds:
 
-Recent checks run against the current repo state:
-- `streaming-dictation/backend`: `npm test` ✅, `npm run typecheck` ✅
-- `streaming-dictation/frontend`: `npm test` ✅, `npm run typecheck` ✅, `npm run build` ✅
-- `streaming-dictation/backend`: `npm run lint` ✅
+- login + session auth
+- transcript history
+- search
+- settings
+- retention controls
+- PWA installability
+- cleanup model selection
 
 ### Legacy Telegram Bot
 
-The legacy Telegram bot remains in the repo and is still intended to work as a fallback transcription path.
+The Telegram bot is the original architecture and remains valuable as a fallback.
 
-It provides:
-- FastAPI webhook intake
-- Redis/RQ queueing
-- worker-based transcription pipeline
-- Telegram file download + response send-back
-- local Whisper/OpenAI-style transcription flow
-- OpenRouter GPT-5 nano cleanup
-- Docker Compose-based deployment
+It is naturally a little slower because the workflow is more batch-like: record, send, process, return. But it is still useful and robust.
 
----
+It also reflects an important design choice in this repo: transcription and cleanup are treated as separate concerns. Audio is transcribed first, then a cleanup model improves the text. In the legacy path, OpenRouter is used for cleanup partly to keep provider flexibility if one upstream path is unavailable.
 
-## Architecture at a Glance
+## Language and cleanup
+
+Both systems use a transcription step and a cleanup step. The cleanup defaults are tuned around British English in the maintainer's own workflow, but this is exactly the kind of thing users should feel free to fork and customise.
+
+## Architecture at a glance
 
 ```text
 Streaming Dictation (primary)
   Browser PWA
-    -> /auth/* and /api/*
     -> Express + TypeScript backend
-    -> OpenAI STT + Kimi/OpenAI cleanup
+    -> OpenAI transcription + cleanup model selection
     -> SQLite transcript store
-    -> systemd service behind Caddy
 
-Legacy Telegram Bot (backup)
+Legacy Telegram Bot (fallback)
   Telegram
     -> FastAPI webhook
     -> Redis queue
     -> RQ workers
-    -> Whisper primary / OpenAI fallback transcription + OpenRouter GPT-5 nano cleanup
-    -> Docker Compose
+    -> Whisper/OpenAI transcription path
+    -> OpenRouter cleanup
 ```
 
----
-
-## Repo Layout
+## Repository layout
 
 ```text
-streaming-dictation/         Primary browser-based dictation app
+streaming-dictation/         Browser-based dictation app
   backend/                   Node + Express + SQLite backend
   frontend/                  React + Vite + TypeScript + PWA frontend
-  scripts/                   Deploy helper(s)
-  systemd/                   Service unit(s)
+  scripts/                   Deploy helpers
+  systemd/                   Example service unit
 
 docs/STREAMING-DICTATION/    Streaming Dictation documentation
 
 webhook/                     Legacy Telegram webhook service
-worker/                      Legacy RQ worker pipeline
-shared/                      Legacy shared Python utilities
+worker/                      Legacy worker pipeline
+shared/                      Shared Python utilities
 tests/                       Legacy Python test suite
-
-docker-compose.yml           Legacy Telegram bot orchestration
-STREAMING-DICTATION-PLAN.md  Planning document for the new app
-RESEARCH-FINDINGS.md         Architecture research and rationale
 ```
 
----
+## Quick start
 
-# Streaming Dictation
+### Streaming Dictation
 
-A browser-based PWA for phone-first and desktop dictation.
-
-## Stack
-
-| Component | Technology | Notes |
-|---|---|---|
-| Backend | Node.js + Express + TypeScript | Serves API and built frontend |
-| Database | SQLite | WAL mode, local single-user persistence |
-| Frontend | React + Vite + TypeScript + Tailwind | Responsive PWA |
-| STT | OpenAI `gpt-4o-mini-transcribe` | Primary transcription model |
-| Cleanup | Kimi or OpenAI `gpt-5-nano` | User-selectable cleanup |
-| Auth | Session cookie | Single-user password login |
-| Service | systemd | Production runtime |
-| Proxy | Caddy | HTTPS / reverse proxy |
-
-## Quick Start
-
-### Backend setup
+Backend:
 
 ```bash
-cd /root/voicenotebot/streaming-dictation/backend
+cd streaming-dictation/backend
 npm install
 cp .env.example .env
-```
-
-Generate a password hash:
-
-```bash
-node -e "const bcrypt = require('bcrypt'); bcrypt.hash('your-password', 10).then(h => console.log(h))"
-```
-
-Add the generated hash to `.env` as `PASSWORD_HASH=...`, then build:
-
-```bash
 npm run build
 ```
 
-### Frontend setup
+Frontend:
 
 ```bash
-cd /root/voicenotebot/streaming-dictation/frontend
+cd streaming-dictation/frontend
 npm install
 npm run build
 ```
 
-### Run via systemd
+### Legacy Telegram Bot
 
 ```bash
-systemctl start streaming-dictation
-systemctl status streaming-dictation
-journalctl -u streaming-dictation -f
-```
-
-### Deploy updates
-
-```bash
-bash /root/voicenotebot/streaming-dictation/scripts/deploy.sh
-```
-
-## Common Operations
-
-```bash
-# Health
-curl http://localhost:3100/health
-
-# Restart service
-systemctl restart streaming-dictation
-
-# Backend tests
-cd /root/voicenotebot/streaming-dictation/backend && npm test
-
-# Frontend tests
-cd /root/voicenotebot/streaming-dictation/frontend && npm test
-```
-
-## Documentation Map
-
-- [`docs/STREAMING-DICTATION/README.md`](./docs/STREAMING-DICTATION/README.md) — docs index and product overview
-- [`docs/STREAMING-DICTATION/ARCHITECTURE.md`](./docs/STREAMING-DICTATION/ARCHITECTURE.md) — backend/frontend/runtime behaviour
-- [`docs/STREAMING-DICTATION/API.md`](./docs/STREAMING-DICTATION/API.md) — REST API
-- [`docs/STREAMING-DICTATION/AUTH.md`](./docs/STREAMING-DICTATION/AUTH.md) — auth model
-- [`docs/STREAMING-DICTATION/OPERATIONS.md`](./docs/STREAMING-DICTATION/OPERATIONS.md) — deployment and service management
-- [`docs/STREAMING-DICTATION/TESTING.md`](./docs/STREAMING-DICTATION/TESTING.md) — checks and test coverage
-- [`docs/STREAMING-DICTATION/TROUBLESHOOTING.md`](./docs/STREAMING-DICTATION/TROUBLESHOOTING.md) — common issues
-- [`docs/STREAMING-DICTATION/BACKEND.md`](./docs/STREAMING-DICTATION/BACKEND.md) — backend-focused implementation notes
-- [`docs/STREAMING-DICTATION/FRONTEND.md`](./docs/STREAMING-DICTATION/FRONTEND.md) — frontend-focused implementation notes
-
----
-
-# Legacy Telegram Bot
-
-A queue-based Telegram voice-to-text transcription bot using FastAPI, Redis/RQ, and worker processes.
-
-## Legacy Architecture
-
-```text
-Telegram
-  -> Caddy / HTTPS
-  -> FastAPI webhook
-  -> Redis queue
-  -> RQ workers
-  -> Whisper / OpenAI-style transcription path
-  -> OpenRouter GPT-5 nano cleanup
-  -> Telegram reply
-```
-
-## Core Services
-
-| Service | Technology | Purpose | Location |
-|---|---|---|---|
-| Webhook | FastAPI + Uvicorn | Receives Telegram updates, enqueues jobs | `webhook/` |
-| Worker | Python + RQ | Processes voice notes | `worker/` |
-| Queue | Redis | Job queue management | Docker container |
-| Shared | Python modules | Telegram client, OpenRouter client, logging | `shared/` |
-
-## Legacy Quick Start
-
-### Prerequisites
-
-- Docker & Docker Compose
-- Telegram bot token
-- OpenRouter API key
-- Whisper service available at `/root/whisper/`
-
-### Configure
-
-```bash
-cd /root/voicenotebot
 cp .env.example .env
-```
-
-Fill in at least:
-
-```bash
-TELEGRAM_BOT_TOKEN=your_token_here
-OPENROUTER_API_KEY=your_key_here
-```
-
-### Run
-
-```bash
 docker compose up -d
-docker compose ps
-curl http://localhost:9999/health
 ```
 
-### Stop
+See the documentation map below before treating these as production instructions; some operational docs remain tuned to the original self-hosted environment.
 
-```bash
-docker compose down
-```
+## Documentation map
 
-### Logs
+- [`docs/STREAMING-DICTATION/README.md`](docs/STREAMING-DICTATION/README.md) — Streaming Dictation docs index
+- [`docs/STREAMING-DICTATION/ARCHITECTURE.md`](docs/STREAMING-DICTATION/ARCHITECTURE.md) — app architecture
+- [`docs/STREAMING-DICTATION/API.md`](docs/STREAMING-DICTATION/API.md) — backend API
+- [`docs/STREAMING-DICTATION/AUTH.md`](docs/STREAMING-DICTATION/AUTH.md) — auth model
+- [`docs/STREAMING-DICTATION/OPERATIONS.md`](docs/STREAMING-DICTATION/OPERATIONS.md) — deployment and service management
+- [`docs/STREAMING-DICTATION/TESTING.md`](docs/STREAMING-DICTATION/TESTING.md) — checks and testing
+- [`STREAMING-DICTATION-PLAN.md`](STREAMING-DICTATION-PLAN.md) — implementation history and plan
+- [`RESEARCH-FINDINGS.md`](RESEARCH-FINDINGS.md) — architecture research
+- [`docs/MAINTAINER-RUNBOOK.md`](docs/MAINTAINER-RUNBOOK.md) — maintainer-facing operational notes preserved from the original private README
 
-```bash
-docker logs -f voicenotebot-webhook
-docker logs -f voicenotebot-worker-1
-docker logs -f voicenotebot-worker-2
-```
+## Notes for public users
 
-## Legacy Notes
-
-- The legacy bot uses **local Whisper as primary** and **OpenAI API as fallback**.
-- Transcript cleanup uses **OpenRouter GPT-5 nano**, which routes across multiple inference providers (OpenAI, Azure, etc.) for resilience.
-- Whisper access is guarded with a Redis-based distributed lock to reduce contention.
-- The `TRANSCRIPTION_PROVIDER` env var controls explicit preference (`whisper` or `openai`).
-- Some legacy Python test/docs surfaces may need refresh before being treated as authoritative current coverage.
-
----
-
-## Security Notes
-
-- Secrets live in `.env` files and should not be committed.
-- Streaming Dictation depends on correct HTTPS/reverse-proxy handling for secure session cookies.
-- Remote microphone access requires HTTPS or localhost.
-- The legacy Redis queue is not intended to be exposed publicly.
+This repository started as a personal, heavily used self-hosted tool. Some docs therefore contain environment-specific paths and operational assumptions. They are useful as reference material, but you should treat them as examples rather than mandatory architecture.
 
 ## License
 
-Private repository / personal use.
+MIT
