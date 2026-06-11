@@ -25,6 +25,7 @@ VoiceNote Bot takes that broader idea into a different use case:
 - phone-friendly rather than single-machine-first
 - self-hosted and easy to adapt
 - useful for people who copy, review, and lightly edit text before sending it into AI tools
+- useful when moving between phone and laptop during the same day
 
 That last point matters. This is not trying to eliminate copy-paste at all costs. In practice, many AI workflows benefit from a short review/edit step before the text is sent onward.
 
@@ -40,6 +41,18 @@ VoiceNote Bot is especially suited to people who:
 
 It may be less ideal for users who stay on one machine all day and want the tightest possible OS-level desktop insertion workflow. There are other excellent tools for that. This repo is strongest when portability and cross-device access matter.
 
+## Why it works well on the go
+
+The biggest advantage of the newer Streaming Dictation app is not just that it runs in a mobile browser — it is that the transcript history follows you across devices.
+
+A practical example:
+- dictate on your phone while away from your desk
+- let the transcript process and land in history
+- open the same app later on your laptop or desktop
+- continue from the same transcript there
+
+The app keeps transcript history, search, and settings in a shared backend store rather than only in one device session. In the default setup, transcript history is retained for **14 days**, which makes it useful as a short rolling cross-device memory while travelling or switching contexts.
+
 ## How the two systems differ
 
 ### Streaming Dictation
@@ -49,7 +62,7 @@ The browser app is the primary current product.
 It is designed for lower-latency dictation by warming up the transcription path and streaming audio during the recording lifecycle. It also adds:
 
 - login + session auth
-- transcript history
+- transcript history shared across your devices
 - search
 - settings
 - retention controls

@@ -19,6 +19,8 @@ It is designed for phone-first use, but the same app also works on desktop brows
 
 The app captures audio from the browser microphone, streams chunks to the backend, transcribes the recording with OpenAI, cleans up the transcript with either Kimi or OpenAI, stores the result in SQLite, and makes it available in history and search.
 
+Because history is stored on the backend rather than only in one browser session, a transcript dictated on a phone can later be opened from a laptop or desktop in the same app. In the default setup, this rolling shared history is retained for 14 days.
+
 ## Current Behaviour
 
 Implemented today:
@@ -27,6 +29,7 @@ Implemented today:
 - OpenAI STT with fallback handling
 - cleanup via **Kimi** or **OpenAI `gpt-5-nano`**
 - transcript history, search, copy, and settings
+- cross-device access to recent transcript history
 - retention-based transcript cleanup
 - warmup endpoint to reduce first-request latency
 - speculative transcription during longer recordings
