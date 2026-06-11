@@ -4,11 +4,12 @@ Read this first, then follow the linked docs.
 
 ## Start Here
 
-- **Repo overview / current status:** [`README.md`](./README.md)
+- **Public repo overview / project story:** [`README.md`](./README.md)
+- **Maintainer runbook / original operational notes:** [`docs/MAINTAINER-RUNBOOK.md`](./docs/MAINTAINER-RUNBOOK.md)
 - **Streaming Dictation docs index:** [`docs/STREAMING-DICTATION/README.md`](./docs/STREAMING-DICTATION/README.md)
 - **Streaming Dictation operations:** [`docs/STREAMING-DICTATION/OPERATIONS.md`](./docs/STREAMING-DICTATION/OPERATIONS.md)
 - **Streaming Dictation testing:** [`docs/STREAMING-DICTATION/TESTING.md`](./docs/STREAMING-DICTATION/TESTING.md)
-- **Legacy Telegram bot runbook:** [`README.md#legacy-telegram-bot`](./README.md#legacy-telegram-bot)
+- **Legacy Telegram bot runbook:** [`docs/MAINTAINER-RUNBOOK.md`](./docs/MAINTAINER-RUNBOOK.md)
 - **Streaming Dictation implementation plan/history:** [`STREAMING-DICTATION-PLAN.md`](./STREAMING-DICTATION-PLAN.md), [`RESEARCH-FINDINGS.md`](./RESEARCH-FINDINGS.md)
 
 ## Repo Shape
