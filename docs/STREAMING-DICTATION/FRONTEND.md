@@ -94,6 +94,16 @@ Important caveat:
 - header navigation
 - wider reading layout for transcript history/search
 
+## Cross-device workflow
+
+A common intended workflow is:
+- dictate from a phone while away from the desk
+- let the transcript finish processing into shared history
+- open the same app later on a laptop or desktop
+- continue from the saved transcript there
+
+This works because transcript history lives in the backend database rather than only in local browser state. By default, that rolling history is kept for 14 days unless the retention setting is changed.
+
 ## Key Source Layout
 
 ```text
