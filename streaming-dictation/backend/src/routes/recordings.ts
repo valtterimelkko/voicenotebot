@@ -4,6 +4,11 @@ import { DB } from '../db';
 import { transcribeWithFallback, startSpeculativeTranscription, shouldUseSpeculative, type SpeculativeResult } from '../services/stt';
 import { cleanupTranscript } from '../services/cleanup';
 import { warmupConnections } from '../services/connectionPool';
+import { logger } from '../services/logger';
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 interface ActiveRecording {
   chunks: Buffer[];
@@ -103,8 +108,16 @@ export function recordingsRouter(db: DB): Router {
       rawText = sttResult.text;
       sttModel = sttResult.model;
       usedFallback = sttResult.usedFallback ? 1 : 0;
-    } catch {
+    } catch (err) {
+      // Transcription totally failed. We still persist a row (with empty text)
+      // so the user sees something happened, but it is flagged, not silent.
       rawText = '';
+      logger.error({
+        event: 'stt_failed',
+        requestId: req.requestId,
+        recordingId: req.params.id,
+        error: errMessage(err),
+      });
     }
 
     let cleanedText = rawText;
@@ -112,11 +125,21 @@ export function recordingsRouter(db: DB): Router {
       try {
         const cleanupResult = await cleanupTranscript(rawText, cleanupModel, sttVocabulary);
         cleanedText = cleanupResult.cleanedText;
-      } catch {
+      } catch (err) {
+        // Cleanup is best-effort: fall back to the raw text, but log it so a
+        // silently degrading cleanup model never goes unnoticed.
         cleanedText = rawText;
+        logger.warn({
+          event: 'cleanup_failed',
+          requestId: req.requestId,
+          recordingId: req.params.id,
+          cleanupModel,
+          error: errMessage(err),
+        });
       }
     }
 
+    const status = rawText ? 'completed' : 'error';
     const previewText = cleanedText.slice(0, 200);
 
     const expiresAt = new Date();
@@ -124,7 +147,7 @@ export function recordingsRouter(db: DB): Router {
 
     db.prepare(`
       INSERT INTO transcripts (id, preview_text, raw_text, cleaned_text, cleanup_model, stt_model, used_fallback, duration_ms, expires_at, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed')
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.params.id,
       previewText,
@@ -134,7 +157,8 @@ export function recordingsRouter(db: DB): Router {
       sttModel,
       usedFallback,
       durationMs,
-      expiresAt.toISOString()
+      expiresAt.toISOString(),
+      status
     );
 
     const transcript = db.prepare('SELECT * FROM transcripts WHERE id = ?').get(req.params.id);

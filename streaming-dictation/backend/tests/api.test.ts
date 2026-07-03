@@ -1,26 +1,17 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import bcrypt from 'bcrypt';
 import { config } from '../src/config';
-import { createTestDb, createTestApp } from './setup';
-import { authRouter } from '../src/routes/auth';
-import { transcriptsRouter } from '../src/routes/transcripts';
-import { settingsRouter } from '../src/routes/settings';
-import { healthRouter } from '../src/routes/health';
-import { requireAuth } from '../src/middleware/auth';
+import { createTestDb, createApp } from './setup';
 import request from 'supertest';
 
 describe('API integration', () => {
-  let app: ReturnType<typeof createTestApp>;
+  let app: ReturnType<typeof createApp>;
   let db: ReturnType<typeof createTestDb>;
 
   beforeEach(() => {
     config.passwordHash = bcrypt.hashSync('testpassword', 4);
     db = createTestDb();
-    app = createTestApp();
-    app.use('/auth', authRouter(db));
-    app.use('/api/transcripts', requireAuth, transcriptsRouter(db));
-    app.use('/api/settings', requireAuth, settingsRouter(db));
-    app.use('/', healthRouter());
+    app = createApp(db);
   });
 
   it('GET /health returns ok', async () => {

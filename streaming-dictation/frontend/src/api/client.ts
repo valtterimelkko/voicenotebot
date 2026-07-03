@@ -30,7 +30,11 @@ async function apiFetch(path: string, options?: RequestInit): Promise<unknown> {
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({})) as Record<string, unknown>
-    throw new Error((body.error as string) ?? `HTTP ${res.status}`)
+    const base = (body.error as string) ?? `HTTP ${res.status}`
+    // Append the backend request id when present so a reported error can be
+    // correlated to the exact server log line.
+    const requestId = typeof body.requestId === 'string' ? body.requestId : undefined
+    throw new Error(requestId ? `${base} (ref ${requestId})` : base)
   }
   return res.json()
 }

@@ -281,7 +281,9 @@ Both fields are optional. `default_cleanup_model` must be `"kimi"` or `"gpt-5-na
 
 ### GET /health
 
-Unauthenticated health check.
+Unauthenticated health check. Probes the SQLite connection with `SELECT 1`, so
+it reflects whether the backend can actually serve requests — not just whether
+the process is listening.
 
 **Response (200):**
 
@@ -289,6 +291,15 @@ Unauthenticated health check.
 {
   "status": "ok",
   "timestamp": "2026-04-23T14:30:00.000Z"
+}
+```
+
+**Response (503)** — the database connection is unavailable:
+
+```json
+{
+  "status": "degraded",
+  "error": "The database connection is not open"
 }
 ```
 
