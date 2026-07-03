@@ -6,6 +6,11 @@ export function createTestDb(): DB {
   return initDatabase(':memory:');
 }
 
+/**
+ * Lightweight Express harness for unit-testing a single router in isolation
+ * (no auth, no full middleware stack). For full-stack integration tests use
+ * `createApp(db)` below instead.
+ */
 export function createTestApp() {
   const app = express();
   app.use(express.json());
@@ -18,3 +23,6 @@ export function createTestApp() {
   }));
   return app;
 }
+
+/** Full-stack factory shared with production (src/app.ts). */
+export { createApp } from '../src/app';

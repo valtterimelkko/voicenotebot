@@ -1,12 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import bcrypt from 'bcrypt';
 import { config } from '../src/config';
-import { createTestDb, createTestApp } from './setup';
-import { authRouter } from '../src/routes/auth';
-import { recordingsRouter } from '../src/routes/recordings';
-import { transcriptsRouter } from '../src/routes/transcripts';
-import { settingsRouter } from '../src/routes/settings';
-import { requireAuth } from '../src/middleware/auth';
+import { createTestDb, createApp } from './setup';
 import { resetForTesting } from '../src/services/connectionPool';
 import request from 'supertest';
 
@@ -42,7 +37,7 @@ const mockedTranscribe = vi.mocked(transcribeWithFallback);
 const mockedCleanup = vi.mocked(cleanupTranscript);
 
 describe('E2E: full login → recording → transcript → search → copy flow', () => {
-  let app: ReturnType<typeof createTestApp>;
+  let app: ReturnType<typeof createApp>;
   let db: ReturnType<typeof createTestDb>;
   let agent: ReturnType<typeof request.agent>;
 
@@ -61,11 +56,7 @@ describe('E2E: full login → recording → transcript → search → copy flow'
 
     config.passwordHash = bcrypt.hashSync('testpassword', 4);
     db = createTestDb();
-    app = createTestApp();
-    app.use('/auth', authRouter(db));
-    app.use('/api/recordings', requireAuth, recordingsRouter(db));
-    app.use('/api/transcripts', requireAuth, transcriptsRouter(db));
-    app.use('/api/settings', requireAuth, settingsRouter(db));
+    app = createApp(db);
     agent = request.agent(app);
   });
 
@@ -213,6 +204,8 @@ describe('E2E: full login → recording → transcript → search → copy flow'
     expect(finishRes.status).toBe(200);
     expect(finishRes.body.raw_text).toBe('');
     expect(finishRes.body.cleaned_text).toBe('');
+    // Total transcription failure must be marked, not silently saved as completed.
+    expect(finishRes.body.status).toBe('error');
   });
 
   it('handles cleanup failure gracefully', async () => {
@@ -237,5 +230,7 @@ describe('E2E: full login → recording → transcript → search → copy flow'
     expect(finishRes.status).toBe(200);
     expect(finishRes.body.raw_text).toBe('Some raw text');
     expect(finishRes.body.cleaned_text).toBe('Some raw text');
+    // Cleanup failure with usable raw text is still a completed transcript.
+    expect(finishRes.body.status).toBe('completed');
   });
 });
