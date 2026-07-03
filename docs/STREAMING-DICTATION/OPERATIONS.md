@@ -101,11 +101,17 @@ journalctl -u streaming-dictation | grep -i error
 curl http://localhost:3100/health
 ```
 
-Expected shape:
+`/health` runs `SELECT 1` against the database, so it reports the backend's
+real ability to serve requests. Healthy → `200 {"status":"ok",...}`; if the DB
+connection is unavailable → `503 {"status":"degraded","error":"..."}`. Point any
+uptime monitor here.
 
-```json
-{"status":"ok","timestamp":"..."}
-```
+## Service Restart Policy
+
+The systemd unit uses `Restart=always` (with a crash-loop guard): a stray
+signal, OOM, or crash revives the service within `RestartSec`. The process
+handles `SIGTERM`/`SIGINT` by closing the database and exiting cleanly so
+systemd can restart it — it must not keep serving over a closed DB.
 
 ## Reverse Proxy Notes
 
