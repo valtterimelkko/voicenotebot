@@ -24,7 +24,7 @@ npm run build
 
 echo "Installing frontend dependencies..."
 cd "$FRONTEND_DIR"
-npm install
+npm install --production=false
 
 echo "Building frontend..."
 npm run build
