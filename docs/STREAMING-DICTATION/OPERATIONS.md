@@ -236,3 +236,9 @@ streaming-dictation/
 └── systemd/
     └── streaming-dictation.service
 ```
+
+---
+
+## Appendix — Legacy runbook
+
+Historical maintainer notes preserved at [`docs/MAINTAINER-RUNBOOK.md`](../../docs/MAINTAINER-RUNBOOK.md).

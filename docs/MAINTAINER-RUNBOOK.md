@@ -1,3 +1,5 @@
+> **Historical — superseded by [`docs/STREAMING-DICTATION/OPERATIONS.md`](./STREAMING-DICTATION/OPERATIONS.md). Kept as reference for the original private README.**
+
 # Maintainer Runbook
 
 This document preserves the original maintainer-facing operational guidance that used to live in the root README.

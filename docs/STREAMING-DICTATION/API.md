@@ -313,7 +313,7 @@ the process is listening.
 |-------|------|-------------|
 | `id` | string (UUID) | Primary key |
 | `created_at` | string | SQLite datetime, auto-generated |
-| `expires_at` | string | ISO timestamp, `created_at + retention_days` |
+| `expires_at` | string | ISO timestamp, `created_at + retention_days` (settings API / env `RETENTION_DAYS`) → retention job hourly `DELETE where expires_at < now()` — see [`OPERATIONS.md`](./OPERATIONS.md) § Retention Behaviour |
 | `preview_text` | string | First 200 characters of `cleaned_text` |
 | `raw_text` | string | Direct STT output |
 | `cleaned_text` | string | LLM-processed output |

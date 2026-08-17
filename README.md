@@ -118,33 +118,19 @@ tests/                       Legacy Python test suite
 
 ## Quick start
 
-### Streaming Dictation
+See [`docs/STREAMING-DICTATION/README.md`](docs/STREAMING-DICTATION/README.md) for the full Streaming Dictation guide.
 
-Backend:
+First-time setup (from [`docs/STREAMING-DICTATION/OPERATIONS.md`](docs/STREAMING-DICTATION/OPERATIONS.md)):
 
 ```bash
-cd streaming-dictation/backend
-npm install
-cp .env.example .env
+cd streaming-dictation/backend && npm install && cp .env.example .env
+# add PASSWORD_HASH + OPENAI_API_KEY + KIMI_API_KEY to .env, then:
 npm run build
+cd ../frontend && npm install && npm run build
+sudo cp streaming-dictation/systemd/streaming-dictation.service /etc/systemd/system/ && sudo systemctl enable --now streaming-dictation
 ```
 
-Frontend:
-
-```bash
-cd streaming-dictation/frontend
-npm install
-npm run build
-```
-
-### Legacy Telegram Bot
-
-```bash
-cp .env.example .env
-docker compose up -d
-```
-
-See the documentation map below before treating these as production instructions; some operational docs remain tuned to the original self-hosted environment.
+Legacy Telegram bot: `cp .env.example .env && docker compose up -d` — see docs map below.
 
 ## Documentation map
 
