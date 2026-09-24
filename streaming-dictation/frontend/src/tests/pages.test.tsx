@@ -25,7 +25,7 @@ const mockTranscript: Transcript = {
   preview_text: 'Hello world preview',
   raw_text: 'hello world raw',
   cleaned_text: 'Hello world cleaned text for testing purposes.',
-  cleanup_model: 'kimi',
+  cleanup_model: 'gpt-5-nano',
   stt_model: 'gpt-4o-mini-transcribe',
   used_fallback: 0,
   duration_ms: 3200,
@@ -33,7 +33,7 @@ const mockTranscript: Transcript = {
 }
 
 const mockSettings: Settings = {
-  default_cleanup_model: 'kimi',
+  default_cleanup_model: 'gpt-5-nano',
   retention_days: 14,
   stt_vocabulary: ''
 }
@@ -232,21 +232,21 @@ describe('SearchPage', () => {
 describe('SettingsPage', () => {
   beforeEach(() => { vi.clearAllMocks() })
 
-  it('shows both cleanup model options after load', async () => {
+  it('shows the gpt-5-nano cleanup model option after load, with no Kimi option', async () => {
     vi.mocked(api.getSettings).mockResolvedValueOnce(mockSettings)
     render(<MemoryRouter><SettingsPage /></MemoryRouter>)
     await waitFor(() => {
-      expect(screen.getByLabelText(/kimi/i)).toBeInTheDocument()
       expect(screen.getByLabelText(/gpt-5-nano/i)).toBeInTheDocument()
+      expect(screen.queryByLabelText(/kimi/i)).not.toBeInTheDocument()
     })
   })
 
-  it('shows selected cleanup model as checked', async () => {
+  it('shows gpt-5-nano cleanup model as checked', async () => {
     vi.mocked(api.getSettings).mockResolvedValueOnce(mockSettings)
     render(<MemoryRouter><SettingsPage /></MemoryRouter>)
     await waitFor(() => {
-      const kimiRadio = screen.getByDisplayValue('kimi') as HTMLInputElement
-      expect(kimiRadio.checked).toBe(true)
+      const radio = screen.getByDisplayValue('gpt-5-nano') as HTMLInputElement
+      expect(radio.checked).toBe(true)
     })
   })
 

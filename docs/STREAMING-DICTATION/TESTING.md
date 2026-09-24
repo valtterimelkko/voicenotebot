@@ -99,7 +99,7 @@ Backend tests currently cover:
 | `tests/transcripts.test.ts` | Route/unit | Transcript CRUD + search |
 | `tests/settings.test.ts` | Route/unit | Settings CRUD |
 | `tests/stt.test.ts` | Unit | STT path + fallback logic |
-| `tests/cleanup.test.ts` | Unit | Kimi/OpenAI cleanup logic |
+| `tests/cleanup.test.ts` | Unit | OpenAI cleanup logic |
 | `tests/retention.test.ts` | Unit | Expiry deletion |
 | `tests/connectionPool.test.ts` | Unit | Warmup/connection helpers |
 | `tests/e2e.test.ts` | Integration | Full login → recording → transcript → search flow |

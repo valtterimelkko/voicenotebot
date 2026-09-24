@@ -1,4 +1,11 @@
-"""Kimi API client for transcript cleanup."""
+"""OpenAI API client for transcript cleanup.
+
+Replaces the previous Kimi (api.kimi.com) and OpenRouter cleanup paths.
+The Kimi API key was deleted (leaked, subscription expired); this client
+calls OpenAI's chat completions API directly with gpt-5-nano, using the
+same OPENAI_API_KEY key-fetching mechanism as the streaming-dictation
+backend's cleanup service and this repo's OpenAI transcription client.
+"""
 
 import os
 from typing import Any
@@ -10,9 +17,9 @@ from .logger import get_logger
 logger = get_logger(__name__)
 
 
-class KimiError(Exception):
-    """Base exception for Kimi API errors."""
-    
+class OpenAICleanupError(Exception):
+    """Base exception for OpenAI cleanup API errors."""
+
     def __init__(
         self,
         message: str,
@@ -25,22 +32,27 @@ class KimiError(Exception):
         self.response_body = response_body
 
 
-class KimiClient:
-    """Kimi API client for voice transcript cleanup.
-    
-    Uses the Kimi coding API to clean up voice transcripts by:
+class OpenAICleanupClient:
+    """OpenAI API client for voice transcript cleanup.
+
+    Uses OpenAI's chat completions API (gpt-5-nano) to clean up voice
+    transcripts by:
     - Converting American English to British spelling
     - Removing filler words (um, uh, öö, ääh, etc.)
     - Fixing transcription errors
     - Preserving original language
-    
+
     Attributes:
-        api_key: Kimi API key from KIMI_API_KEY env var.
-        base_url: Kimi API base URL.
+        api_key: OpenAI API key from OPENAI_API_KEY env var.
+        base_url: OpenAI API base URL.
         client: httpx.AsyncClient for making requests.
     """
 
-    # System prompt for transcript cleanup
+    MODEL = "gpt-5-nano"
+    BASE_URL = "https://api.openai.com/v1"
+
+    # System prompt for transcript cleanup (same wording used by the
+    # streaming-dictation backend's cleanup service, for consistent output).
     SYSTEM_PROMPT = (
         "You are a transcription editor. Clean up voice transcripts with a LIGHT touch:\n"
         "1. Fix spelling and grammar mistakes only when they're clearly wrong\n"
@@ -59,66 +71,56 @@ class KimiClient:
     )
 
     def __init__(self, api_key: str | None = None) -> None:
-        """Initialize the Kimi client.
-        
+        """Initialize the OpenAI cleanup client.
+
         Args:
-            api_key: Kimi API key. If None, reads from KIMI_API_KEY env var.
-        
+            api_key: OpenAI API key. If None, reads from OPENAI_API_KEY env var.
+
         Raises:
-            KimiError: If no API key is provided or found in environment.
+            OpenAICleanupError: If no API key is provided or found in environment.
         """
-        self.api_key = api_key or os.getenv("KIMI_API_KEY")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
-            raise KimiError(
-                "Kimi API key not provided. "
-                "Set KIMI_API_KEY environment variable."
+            raise OpenAICleanupError(
+                "OpenAI API key not provided. "
+                "Set OPENAI_API_KEY environment variable."
             )
-        
-        self.base_url = "https://api.kimi.com/coding/v1"
+
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(300.0, connect=30.0),  # 5 min for long transcripts
             follow_redirects=True,
         )
-        logger.info("kimi_client_initialized")
+        logger.info("openai_cleanup_client_initialized", model=self.MODEL)
 
     def _get_headers(self) -> dict[str, str]:
-        """Get request headers for Kimi API."""
+        """Get request headers for OpenAI API."""
         return {
             "Authorization": f"Bearer {self.api_key}",
-            "User-Agent": "KimiCLI/1.0",
             "Content-Type": "application/json",
         }
 
     async def cleanup_transcript(self, transcript_text: str) -> str:
-        """Clean up a voice transcript using Kimi API.
-        
-        Sends the transcript to Kimi API with a system prompt that instructs
-        the model to clean up filler words, fix errors, and convert to British
-        English spelling.
-        
+        """Clean up a voice transcript using OpenAI's chat completions API.
+
         Args:
             transcript_text: Raw transcript text from Whisper.
-        
+
         Returns:
             Cleaned transcript text.
-        
+
         Raises:
-            KimiError: If API request fails, rate limited, or response parsing fails.
-        
-        Example:
-            >>> raw = "Um, so like, I was thinking about the color..."
-            >>> cleaned = await client.cleanup_transcript(raw)
-            >>> print(cleaned)
-            "I was thinking about the colour..."
+            OpenAICleanupError: If API request fails, rate limited, or
+                response parsing fails.
         """
         logger.debug(
             "cleanup_transcript_start",
             transcript_length=len(transcript_text),
         )
-        
-        url = f"{self.base_url}/chat/completions"
-        
+
+        url = f"{self.BASE_URL}/chat/completions"
+
         payload: dict[str, Any] = {
+            "model": self.MODEL,
             "messages": [
                 {
                     "role": "system",
@@ -129,9 +131,16 @@ class KimiClient:
                     "content": f"Clean up this transcript:\n\n{transcript_text}",
                 },
             ],
-            "model": "kimi-for-coding",
-            "temperature": 0.3,
-            "max_tokens": 60000,
+            # Note: gpt-5-nano rejects two legacy chat-completions params
+            # that earlier cleanup clients (Kimi, OpenRouter) used to send:
+            # - "max_tokens" (400: "Unsupported parameter... Use
+            #   'max_completion_tokens' instead")
+            # - any "temperature" other than the default of 1 (400:
+            #   "Unsupported value... Only the default (1) value is
+            #   supported")
+            # Both are intentionally omitted; this matches the
+            # streaming-dictation backend's proven-working OpenAI SDK call
+            # (src/services/cleanup.ts).
         }
 
         try:
@@ -147,68 +156,78 @@ class KimiClient:
                 error_body = e.response.json()
             except Exception:
                 pass
-            
+
             logger.error(
-                "kimi_api_error",
+                "openai_cleanup_api_error",
                 status_code=e.response.status_code,
                 error=str(e),
                 error_body=error_body,
             )
-            
+
             if e.response.status_code == 429:
-                raise KimiError(
+                raise OpenAICleanupError(
                     "Rate limit exceeded. Please try again later.",
                     error_code=429,
                     response_body=error_body,
                 )
             elif e.response.status_code == 401:
-                raise KimiError(
-                    "Invalid API key. Check your KIMI_API_KEY.",
+                raise OpenAICleanupError(
+                    "Invalid API key. Check your OPENAI_API_KEY.",
                     error_code=401,
                     response_body=error_body,
                 )
             else:
-                raise KimiError(
+                raise OpenAICleanupError(
                     f"HTTP error {e.response.status_code}: {str(e)}",
                     error_code=e.response.status_code,
                     response_body=error_body,
                 )
         except httpx.TimeoutException as e:
             logger.error(
-                "kimi_api_timeout",
+                "openai_cleanup_api_timeout",
                 error=str(e),
                 transcript_length=len(transcript_text),
             )
-            raise KimiError(
-                f"Request timed out after 120s: {str(e)}",
+            raise OpenAICleanupError(
+                f"Request timed out: {str(e)}",
                 error_code=408,
             )
         except httpx.RequestError as e:
             logger.error(
-                "kimi_request_failed",
+                "openai_cleanup_request_failed",
                 error=str(e),
             )
-            raise KimiError(f"Request failed: {str(e)}")
+            raise OpenAICleanupError(f"Request failed: {str(e)}")
 
         try:
             data = response.json()
         except Exception as e:
             logger.error(
-                "kimi_response_parse_error",
+                "openai_cleanup_response_parse_error",
                 error=str(e),
             )
-            raise KimiError(f"Failed to parse response: {str(e)}")
+            raise OpenAICleanupError(f"Failed to parse response: {str(e)}")
+
+        if "error" in data:
+            logger.error(
+                "openai_cleanup_api_error_in_response",
+                error=data["error"],
+            )
+            raise OpenAICleanupError(
+                f"API error: {data['error']}",
+                response_body=data,
+            )
 
         # Extract cleaned text from response
         try:
             cleaned_text = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError) as e:
             logger.error(
-                "kimi_response_structure_error",
+                "openai_cleanup_response_structure_error",
                 response_keys=list(data.keys()) if isinstance(data, dict) else None,
                 error=str(e),
             )
-            raise KimiError(
+            raise OpenAICleanupError(
                 f"Unexpected response structure: {str(e)}",
                 response_body=data,
             )
@@ -227,9 +246,9 @@ class KimiClient:
     async def close(self) -> None:
         """Close the HTTP client."""
         await self.client.aclose()
-        logger.debug("kimi_client_closed")
+        logger.debug("openai_cleanup_client_closed")
 
-    async def __aenter__(self) -> "KimiClient":
+    async def __aenter__(self) -> "OpenAICleanupClient":
         """Async context manager entry."""
         return self
 

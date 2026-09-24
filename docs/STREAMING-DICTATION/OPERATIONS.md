@@ -133,9 +133,8 @@ All variables are read from `/root/voicenotebot/streaming-dictation/backend/.env
 | `NODE_ENV` | No | `development` | Set to `production` for secure cookies |
 | `SESSION_SECRET` | Yes | `dev-secret-change-in-prod` | Session signing secret |
 | `PASSWORD_HASH` | Yes | (empty) | bcrypt hash for login |
-| `OPENAI_API_KEY` | Yes | (empty) | OpenAI API key |
-| `KIMI_API_KEY` | Yes | (empty) | Kimi API key |
-| `DEFAULT_CLEANUP_MODEL` | No | `kimi` | `kimi` or `gpt-5-nano` |
+| `OPENAI_API_KEY` | Yes | (empty) | OpenAI API key (STT and cleanup) |
+| `DEFAULT_CLEANUP_MODEL` | No | `gpt-5-nano` | `gpt-5-nano` (only supported value) |
 | `RETENTION_DAYS` | No | `14` | Auto-delete transcripts after N days |
 | `DATABASE_PATH` | No | `data/transcripts.db` | SQLite file path |
 

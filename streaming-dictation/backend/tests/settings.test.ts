@@ -16,7 +16,7 @@ describe('settings routes', () => {
   it('GET / returns default settings', async () => {
     const res = await request(app).get('/api/settings');
     expect(res.status).toBe(200);
-    expect(res.body.default_cleanup_model).toBe('kimi');
+    expect(res.body.default_cleanup_model).toBe('gpt-5-nano');
     expect(res.body.retention_days).toBe(60);
     expect(res.body.stt_vocabulary).toBe('');
   });
@@ -37,7 +37,7 @@ describe('settings routes', () => {
       .send({ retention_days: 30 });
     expect(res.status).toBe(200);
     expect(res.body.retention_days).toBe(30);
-    expect(res.body.default_cleanup_model).toBe('kimi');
+    expect(res.body.default_cleanup_model).toBe('gpt-5-nano');
     expect(res.body.stt_vocabulary).toBe('');
   });
 
@@ -64,7 +64,7 @@ describe('settings routes', () => {
       .put('/api/settings')
       .send({ default_cleanup_model: 123 });
     expect(res.status).toBe(200);
-    expect(res.body.default_cleanup_model).toBe('kimi');
+    expect(res.body.default_cleanup_model).toBe('gpt-5-nano');
   });
 
   it('PUT / with empty body keeps existing settings', async () => {
@@ -72,7 +72,7 @@ describe('settings routes', () => {
       .put('/api/settings')
       .send({});
     expect(res.status).toBe(200);
-    expect(res.body.default_cleanup_model).toBe('kimi');
+    expect(res.body.default_cleanup_model).toBe('gpt-5-nano');
     expect(res.body.retention_days).toBe(60);
     expect(res.body.stt_vocabulary).toBe('');
   });
@@ -83,7 +83,7 @@ describe('settings routes', () => {
       .send({ stt_vocabulary: 'Claude\nAnthropic' });
     expect(res.status).toBe(200);
     expect(res.body.stt_vocabulary).toBe('Claude\nAnthropic');
-    expect(res.body.default_cleanup_model).toBe('kimi');
+    expect(res.body.default_cleanup_model).toBe('gpt-5-nano');
     expect(res.body.retention_days).toBe(60);
   });
 

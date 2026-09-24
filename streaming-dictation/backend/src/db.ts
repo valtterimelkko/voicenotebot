@@ -38,7 +38,7 @@ export function initDatabase(dbPath: string): Database.Database {
 
     CREATE TABLE IF NOT EXISTS user_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
-      default_cleanup_model TEXT NOT NULL DEFAULT 'kimi',
+      default_cleanup_model TEXT NOT NULL DEFAULT 'gpt-5-nano',
       retention_days INTEGER NOT NULL DEFAULT 60,
       stt_vocabulary TEXT NOT NULL DEFAULT ''
     );
@@ -53,7 +53,14 @@ export function initDatabase(dbPath: string): Database.Database {
 
   // Ensure the default settings row exists
   db.exec(`
-    INSERT OR IGNORE INTO user_settings (id, default_cleanup_model, retention_days, stt_vocabulary) VALUES (1, 'kimi', 60, '');
+    INSERT OR IGNORE INTO user_settings (id, default_cleanup_model, retention_days, stt_vocabulary) VALUES (1, 'gpt-5-nano', 60, '');
+  `);
+
+  // Migration: the Kimi API key was deleted and Kimi cleanup is no longer
+  // supported. Normalise any pre-existing row still pointing at 'kimi' to
+  // the OpenAI gpt-5-nano cleanup model.
+  db.exec(`
+    UPDATE user_settings SET default_cleanup_model = 'gpt-5-nano' WHERE default_cleanup_model = 'kimi';
   `);
 
   return db;

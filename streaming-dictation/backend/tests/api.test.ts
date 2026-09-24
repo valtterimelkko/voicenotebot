@@ -54,7 +54,7 @@ describe('API integration', () => {
 
     const res = await agent.get('/api/settings');
     expect(res.status).toBe(200);
-    expect(res.body.default_cleanup_model).toBe('kimi');
+    expect(res.body.default_cleanup_model).toBe('gpt-5-nano');
     expect(res.body.retention_days).toBe(60);
   });
 

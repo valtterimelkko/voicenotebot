@@ -130,7 +130,7 @@ Finalize recording: transcribe audio, run cleanup, store transcript.
   "preview_text": "First 200 characters of cleaned text...",
   "raw_text": "Raw STT output...",
   "cleaned_text": "Cleaned up transcript...",
-  "cleanup_model": "kimi",
+  "cleanup_model": "gpt-5-nano",
   "stt_model": "gpt-4o-mini-transcribe",
   "used_fallback": 0,
   "duration_ms": 15420,
@@ -166,7 +166,7 @@ List all transcripts, newest first.
       "preview_text": "...",
       "raw_text": "...",
       "cleaned_text": "...",
-      "cleanup_model": "kimi",
+      "cleanup_model": "gpt-5-nano",
       "stt_model": "gpt-4o-mini-transcribe",
       "used_fallback": 0,
       "duration_ms": 15420,
@@ -244,7 +244,7 @@ Get current user settings.
 
 ```json
 {
-  "default_cleanup_model": "kimi",
+  "default_cleanup_model": "gpt-5-nano",
   "retention_days": 14
 }
 ```
@@ -264,7 +264,7 @@ Update user settings. Supports partial updates.
 }
 ```
 
-Both fields are optional. `default_cleanup_model` must be `"kimi"` or `"gpt-5-nano"`. `retention_days` must be a number.
+Both fields are optional. `default_cleanup_model` must be `"gpt-5-nano"` (the only supported cleanup model). `retention_days` must be a number.
 
 **Response (200):** Updated settings object:
 
@@ -317,7 +317,7 @@ the process is listening.
 | `preview_text` | string | First 200 characters of `cleaned_text` |
 | `raw_text` | string | Direct STT output |
 | `cleaned_text` | string | LLM-processed output |
-| `cleanup_model` | string | `"kimi"` or `"gpt-5-nano"` |
+| `cleanup_model` | string | `"gpt-5-nano"` |
 | `stt_model` | string | `"gpt-4o-mini-transcribe"` |
 | `used_fallback` | number | `1` if batch STT fallback was used, `0` otherwise |
 | `duration_ms` | number \| null | Recording duration in milliseconds |
@@ -333,20 +333,23 @@ the process is listening.
 | `NODE_ENV` | No | `development` | Set to `production` for secure cookies |
 | `SESSION_SECRET` | Yes | `dev-secret-change-in-prod` | Secret for session cookie signing |
 | `PASSWORD_HASH` | Yes | (empty) | bcrypt hash of the login password |
-| `OPENAI_API_KEY` | Yes | (empty) | OpenAI API key for STT and optional cleanup |
-| `KIMI_API_KEY` | Yes | (empty) | Kimi API key for transcript cleanup |
-| `DEFAULT_CLEANUP_MODEL` | No | `kimi` | Default LLM for cleanup: `kimi` or `gpt-5-nano` |
+| `OPENAI_API_KEY` | Yes | (empty) | OpenAI API key for STT and cleanup |
+| `DEFAULT_CLEANUP_MODEL` | No | `gpt-5-nano` | Default LLM for cleanup: `gpt-5-nano` (only supported value) |
 | `RETENTION_DAYS` | No | `14` | Days before transcripts are auto-deleted |
 | `DATABASE_PATH` | No | `data/transcripts.db` | SQLite database file path |
 
 ---
 
-## Kimi API Contract
+## OpenAI Cleanup Contract
 
-- **Endpoint**: `https://api.kimi.com/coding/v1/chat/completions`
-- **Headers**: `Authorization: Bearer <key>`, `User-Agent: KimiCLI/1.0`, `Content-Type: application/json`
-- **Model**: `kimi-for-coding`
+Transcript cleanup calls OpenAI's chat completions API directly via the
+official `openai` SDK, using `OPENAI_API_KEY` (the same key used for STT).
+
+- **Model**: `gpt-5-nano`
 - **Temperature**: 0.3
 - **Max tokens**: 60000
-- **Timeout**: 300 seconds (read), abort via `AbortController`
-- **Response**: `data.choices[0].message.content`
+- **Response**: `response.choices[0].message.content`
+
+> Kimi cleanup (`api.kimi.com`) was removed after the Kimi API key was
+> deleted/leaked and the Kimi subscription expired. `KIMI_API_KEY` is no
+> longer read anywhere in this app.

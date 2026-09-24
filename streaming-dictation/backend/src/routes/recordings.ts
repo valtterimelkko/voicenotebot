@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { DB } from '../db';
 import { transcribeWithFallback, startSpeculativeTranscription, shouldUseSpeculative, type SpeculativeResult } from '../services/stt';
-import { cleanupTranscript } from '../services/cleanup';
+import { cleanupTranscript, type CleanupModel } from '../services/cleanup';
 import { warmupConnections } from '../services/connectionPool';
 import { logger } from '../services/logger';
 
@@ -86,7 +86,7 @@ export function recordingsRouter(db: DB): Router {
       'SELECT default_cleanup_model, retention_days, stt_vocabulary FROM user_settings WHERE id = 1'
     ).get() as SettingsRow;
 
-    const cleanupModel = settings.default_cleanup_model as 'kimi' | 'gpt-5-nano';
+    const cleanupModel = settings.default_cleanup_model as CleanupModel;
     const retentionDays = settings.retention_days;
     const sttVocabulary = settings.stt_vocabulary;
 

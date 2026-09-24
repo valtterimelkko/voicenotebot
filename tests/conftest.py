@@ -3,7 +3,7 @@ Test fixtures and configuration for VoiceNote Bot test suite.
 
 This module provides:
 - Mocked Telegram API responses
-- Mocked Kimi API responses  
+- Mocked OpenAI cleanup API responses
 - Mocked Whisper service
 - Redis test configuration (fakeredis)
 - Temp file management
@@ -30,7 +30,7 @@ sys.path.insert(0, str(project_root))
 
 # Environment setup for tests
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test_token_12345")
-os.environ.setdefault("KIMI_API_KEY", "test_kimi_key_12345")
+os.environ.setdefault("OPENAI_API_KEY", "test_openai_key_12345")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")  # Use DB 15 for tests
 os.environ.setdefault("WHISPER_URL", "http://localhost:9000/asr")
 os.environ.setdefault("WEBHOOK_SECRET", "test_webhook_secret")
@@ -221,19 +221,18 @@ def telegram_error_response() -> dict:
 
 
 # =============================================================================
-# Kimi API Mock Fixtures
+# OpenAI Cleanup API Mock Fixtures
 # =============================================================================
 
 @pytest.fixture(scope="function")
-def mock_kimi_api(respx_mock: respx.MockRouter) -> respx.MockRouter:
+def mock_openai_cleanup_api(respx_mock: respx.MockRouter) -> respx.MockRouter:
     """
-    Mock Kimi API endpoints.
-    
-    Returns a respx MockRouter with Kimi API endpoints pre-configured.
+    Mock OpenAI chat completions endpoint used for transcript cleanup.
+
+    Returns a respx MockRouter with the OpenAI cleanup endpoint pre-configured.
     """
-    base_url = "https://api.moonshot.cn"
-    
-    # Chat completions endpoint
+    base_url = "https://api.openai.com"
+
     respx_mock.post(f"{base_url}/v1/chat/completions").mock(
         return_value=Response(
             200,
@@ -241,7 +240,7 @@ def mock_kimi_api(respx_mock: respx.MockRouter) -> respx.MockRouter:
                 "id": "chat-123",
                 "object": "chat.completion",
                 "created": 1234567890,
-                "model": "kimi-latest",
+                "model": "gpt-5-nano",
                 "choices": [
                     {
                         "index": 0,
@@ -260,13 +259,13 @@ def mock_kimi_api(respx_mock: respx.MockRouter) -> respx.MockRouter:
             }
         )
     )
-    
+
     return respx_mock
 
 
 @pytest.fixture(scope="function")
-def kimi_error_response() -> dict:
-    """Return a sample Kimi API error response."""
+def openai_cleanup_error_response() -> dict:
+    """Return a sample OpenAI cleanup API error response."""
     return {
         "error": {
             "message": "Invalid API key",
@@ -413,9 +412,11 @@ def webhook_app(mock_redis_client: Mock) -> Generator:
 @pytest_asyncio.fixture(scope="function")
 async def async_webhook_client(webhook_app) -> AsyncGenerator:
     """Create async test client for webhook tests."""
-    from httpx import AsyncClient
-    
-    async with AsyncClient(app=webhook_app, base_url="http://test") as client:
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(
+        transport=ASGITransport(app=webhook_app), base_url="http://test"
+    ) as client:
         yield client
 
 
@@ -438,12 +439,11 @@ def mock_telegram_client() -> Generator[Mock, None, None]:
 
 
 @pytest.fixture(scope="function")
-def mock_kimi_client() -> Generator[Mock, None, None]:
-    """Mock KimiClient for testing."""
-    with patch("shared.kimi_client.KimiClient") as mock_class:
+def mock_openai_cleanup_client() -> Generator[Mock, None, None]:
+    """Mock OpenAICleanupClient for testing."""
+    with patch("shared.openai_cleanup_client.OpenAICleanupClient") as mock_class:
         mock_instance = Mock()
-        mock_instance.format_transcription = AsyncMock(return_value="Formatted transcription text")
-        mock_instance.summarize = AsyncMock(return_value="Summary of the transcription")
+        mock_instance.cleanup_transcript = AsyncMock(return_value="Formatted transcription text")
         mock_class.return_value = mock_instance
         yield mock_instance
 
@@ -460,7 +460,7 @@ def sample_transcription() -> str:
 
 @pytest.fixture(scope="function")
 def sample_formatted_text() -> str:
-    """Return a sample formatted transcription from Kimi."""
+    """Return a sample formatted transcription from the cleanup model."""
     return """📝 **Transcription**
 
 This is a formatted transcription of your voice note. The AI has organized it into clear paragraphs and fixed any grammar issues.

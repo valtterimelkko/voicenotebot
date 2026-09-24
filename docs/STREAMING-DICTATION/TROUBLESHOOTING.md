@@ -7,7 +7,7 @@
 **Check**:
 
 ```bash
-grep -E '(PASSWORD_HASH|OPENAI_API_KEY|KIMI_API_KEY|SESSION_SECRET)' \
+grep -E '(PASSWORD_HASH|OPENAI_API_KEY|SESSION_SECRET)' \
   /root/voicenotebot/streaming-dictation/backend/.env
 ```
 
@@ -54,33 +54,27 @@ journalctl -u streaming-dictation | grep -i 'stt\|transcription\|openai'
 
 ---
 
-## Kimi Cleanup Failures
+## OpenAI Cleanup Failures
 
 **Symptom**: `cleaned_text` is identical to `raw_text`, or transcripts appear uncleaned.
 
 **Check logs**:
 
 ```bash
-journalctl -u streaming-dictation | grep -i kimi
+journalctl -u streaming-dictation | grep -i cleanup
 ```
 
 **Common causes**:
-- invalid `KIMI_API_KEY`
-- Kimi API timeout or rate limit
+- invalid or expired `OPENAI_API_KEY`
+- OpenAI API timeout or rate limit
 - network issues
 
 **Expected fallback behaviour**:
 - if cleanup fails, the app keeps the raw transcript rather than failing the whole recording
 
-**Temporary mitigation**:
-Switch cleanup to OpenAI:
-
-```bash
-curl -X PUT http://localhost:3100/api/settings \
-  -H 'Content-Type: application/json' \
-  -b cookie.txt \
-  -d '{"default_cleanup_model":"gpt-5-nano"}'
-```
+> Kimi cleanup (`api.kimi.com`) was removed after the Kimi API key was
+> deleted/leaked and the Kimi subscription expired. `gpt-5-nano` via
+> `OPENAI_API_KEY` is now the only cleanup path.
 
 ---
 

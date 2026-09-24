@@ -26,7 +26,7 @@ vi.mock('../src/services/stt', () => ({
 vi.mock('../src/services/cleanup', () => ({
   cleanupTranscript: vi.fn().mockResolvedValue({
     cleanedText: 'Hello world, this is a cleaned transcription about important things.',
-    model: 'kimi',
+    model: 'gpt-5-nano',
   }),
 }));
 
@@ -51,7 +51,7 @@ describe('E2E: full login → recording → transcript → search → copy flow'
     });
     mockedCleanup.mockResolvedValue({
       cleanedText: 'Hello world, this is a cleaned transcription about important things.',
-      model: 'kimi',
+      model: 'gpt-5-nano',
     });
 
     config.passwordHash = bcrypt.hashSync('testpassword', 4);
@@ -86,7 +86,7 @@ describe('E2E: full login → recording → transcript → search → copy flow'
     expect(finishRes.body.raw_text).toBe('Hello world this is a test transcription about important things');
     expect(finishRes.body.cleaned_text).toBe('Hello world, this is a cleaned transcription about important things.');
     expect(finishRes.body.stt_model).toBe('gpt-4o-mini-transcribe');
-    expect(finishRes.body.cleanup_model).toBe('kimi');
+    expect(finishRes.body.cleanup_model).toBe('gpt-5-nano');
     expect(finishRes.body.status).toBe('completed');
 
     expect(mockedTranscribe).toHaveBeenCalledOnce();

@@ -4,7 +4,6 @@ import { LoadingSpinner } from '../components/LoadingSpinner'
 import { useSettingsStore } from '../store/settingsStore'
 
 const CLEANUP_MODELS = [
-  { value: 'kimi', label: 'Kimi', description: 'Moonshot AI — good multilingual cleanup' },
   { value: 'gpt-5-nano', label: 'gpt-5-nano', description: 'OpenAI — fast and cost-effective' }
 ] as const
 

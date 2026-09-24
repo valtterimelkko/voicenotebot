@@ -14,7 +14,7 @@ export function settingsRouter(db: DB): Router {
     const row = db.prepare(
       'SELECT default_cleanup_model, retention_days, stt_vocabulary FROM user_settings WHERE id = 1'
     ).get() as SettingsRow | undefined;
-    res.json(row ?? { default_cleanup_model: 'kimi', retention_days: 60, stt_vocabulary: '' });
+    res.json(row ?? { default_cleanup_model: 'gpt-5-nano', retention_days: 60, stt_vocabulary: '' });
   });
 
   router.put('/', (req: Request, res: Response) => {

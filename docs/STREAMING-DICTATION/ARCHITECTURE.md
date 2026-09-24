@@ -9,7 +9,7 @@
 | Frontend | React + Vite + TypeScript + Tailwind |
 | PWA | vite-plugin-pwa |
 | STT | OpenAI `gpt-4o-mini-transcribe` |
-| Cleanup | Kimi (`kimi-for-coding`) or OpenAI (`gpt-5-nano`) |
+| Cleanup | OpenAI (`gpt-5-nano`) |
 | Test | Vitest + supertest |
 | Deployment | systemd behind Caddy |
 
@@ -22,7 +22,7 @@ Browser PWA
       -> session auth
       -> recording lifecycle
       -> OpenAI STT
-      -> Kimi / OpenAI cleanup
+      -> OpenAI cleanup
       -> SQLite transcripts + settings + sessions
       -> retention cleanup
   -> built frontend served by the same backend process
@@ -65,7 +65,6 @@ Browser Microphone
 │  │     │                                │  │
 │  │     ▼                                │  │
 │  │  LLM Cleanup                         │  │
-│  │     ├─ Kimi (kimi-for-coding)        │  │
 │  │     └─ OpenAI (gpt-5-nano)           │  │
 │  │     │                                │  │
 │  │     ▼                                │  │
@@ -148,7 +147,7 @@ If proxy configuration is wrong, authentication may appear broken even when the 
 | `preview_text` | TEXT | First 200 chars of cleaned text |
 | `raw_text` | TEXT | Raw STT output |
 | `cleaned_text` | TEXT | LLM-cleaned output |
-| `cleanup_model` | TEXT | `kimi` or `gpt-5-nano` |
+| `cleanup_model` | TEXT | `gpt-5-nano` |
 | `stt_model` | TEXT | `gpt-4o-mini-transcribe` |
 | `used_fallback` | INTEGER | 1 if batch fallback was used |
 | `duration_ms` | INTEGER | Recording duration in milliseconds |
@@ -161,7 +160,7 @@ Single-row table (`id = 1`):
 | Column | Type | Default |
 |--------|------|---------|
 | `id` | INTEGER PK | 1 |
-| `default_cleanup_model` | TEXT | `kimi` |
+| `default_cleanup_model` | TEXT | `gpt-5-nano` |
 | `retention_days` | INTEGER | 14 |
 
 ### `sessions`
@@ -183,7 +182,7 @@ Used by express-session store:
 
 ## Cleanup and retention
 
-- Cleanup uses either Kimi or OpenAI, with the same broad transcript-cleaning intent.
+- Cleanup uses OpenAI `gpt-5-nano` directly via `OPENAI_API_KEY` (Kimi cleanup was removed after the Kimi API key was deleted/leaked).
 - Retention cleanup runs on an interval and deletes transcripts past expiry.
 - Retention affects stored transcript history, not active in-memory recordings.
 

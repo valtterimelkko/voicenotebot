@@ -124,7 +124,7 @@ First-time setup (from [`docs/STREAMING-DICTATION/OPERATIONS.md`](docs/STREAMING
 
 ```bash
 cd streaming-dictation/backend && npm install && cp .env.example .env
-# add PASSWORD_HASH + OPENAI_API_KEY + KIMI_API_KEY to .env, then:
+# add PASSWORD_HASH + OPENAI_API_KEY to .env, then:
 npm run build
 cd ../frontend && npm install && npm run build
 sudo cp streaming-dictation/systemd/streaming-dictation.service /etc/systemd/system/ && sudo systemctl enable --now streaming-dictation

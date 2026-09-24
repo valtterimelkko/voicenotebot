@@ -2,7 +2,7 @@
 VoiceNote Bot Worker Tasks
 
 RQ worker tasks for processing voice note transcription:
-download → whisper → openrouter (GPT-5 nano) → send result
+download → whisper → OpenAI (gpt-5-nano cleanup) → send result
 """
 
 import asyncio
@@ -19,7 +19,7 @@ import structlog
 # Add parent directory to path for shared imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from shared import get_logger, TelegramClient, OpenRouterClient, OpenRouterError, OpenAITranscriptionClient, OpenAITranscriptionError
+from shared import get_logger, TelegramClient, OpenAICleanupClient, OpenAICleanupError, OpenAITranscriptionClient, OpenAITranscriptionError
 
 # Configure logging
 logger = get_logger(__name__)
@@ -209,7 +209,7 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
     try:
         # Initialize clients
         telegram_client = TelegramClient(token=TELEGRAM_BOT_TOKEN)
-        cleanup_client = OpenRouterClient()
+        cleanup_client = OpenAICleanupClient()
         
         # Step 1: Get file info from Telegram
         logger.debug("Getting file info from Telegram", file_id=file_id)
@@ -315,25 +315,25 @@ def process_voice_note(file_id: str, chat_id: int, message_id: int | None = None
             transcript_hash=hash(transcript) & 0xFFFFFFFF,
         )
         
-        # Step 5: Clean up with OpenRouter GPT-5 nano
-        logger.debug("Sending to OpenRouter for cleanup")
+        # Step 5: Clean up with OpenAI gpt-5-nano
+        logger.debug("Sending to OpenAI for cleanup")
         try:
             cleaned_text = _run_async(cleanup_client.cleanup_transcript(transcript))
-        except OpenRouterError as e:
+        except OpenAICleanupError as e:
             error_str = str(e).lower()
             if "token" in error_str or "length" in error_str or "too long" in error_str:
-                logger.warning("OpenRouter token limit exceeded")
+                logger.warning("OpenAI cleanup token limit exceeded")
                 _run_async(telegram_client.send_message(chat_id=chat_id, text=ERROR_CLEANUP_TOKEN_LIMIT))
                 raise
             raise
-        
+
         if not cleaned_text:
-            logger.warning("OpenRouter cleanup returned empty, using raw transcript")
+            logger.warning("OpenAI cleanup returned empty, using raw transcript")
             cleaned_text = transcript
-        
-        # 🔍 Log OpenRouter output for comparison with Whisper
+
+        # 🔍 Log OpenAI cleanup output for comparison with Whisper
         logger.info(
-            "OpenRouter cleanup complete - RAW OUTPUT",
+            "OpenAI cleanup complete - RAW OUTPUT",
             cleaned_length=len(cleaned_text),
             cleaned_preview=cleaned_text[:500] if len(cleaned_text) > 500 else cleaned_text,
             cleaned_hash=hash(cleaned_text) & 0xFFFFFFFF,
@@ -526,8 +526,8 @@ def _get_error_message_for_exception(e: Exception) -> str:
     if "token_limit_exceeded" in error_str:
         return ERROR_CLEANUP_TOKEN_LIMIT
     
-    # Check for OpenRouter errors related to token limits
-    if isinstance(e, OpenRouterError):
+    # Check for OpenAI cleanup errors related to token limits
+    if isinstance(e, OpenAICleanupError):
         if "token" in error_str or "too long" in error_str or e.error_code == 413:
             return ERROR_CLEANUP_TOKEN_LIMIT
     

@@ -76,9 +76,8 @@ Current model:
 
 ## Cleanup Behaviour
 
-Current supported cleanup models:
-- Kimi
-- OpenAI `gpt-5-nano`
+Current supported cleanup model:
+- OpenAI `gpt-5-nano` (via `OPENAI_API_KEY`; Kimi cleanup was removed after the Kimi API key was deleted/leaked)
 
 If cleanup fails, the backend keeps the raw transcript rather than failing the entire recording flow.
 
