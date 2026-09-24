@@ -1,78 +1,96 @@
 """
 Worker task tests for VoiceNote Bot.
 
-Tests the process_voice_note task including:
-- Success path (download → transcribe → format → send)
-- File size validation (>20MB rejected)
-- Whisper service failure triggers retry
-- Kimi API failure triggers retry
-- Telegram send failure handling
-- Temp file cleanup
+Tests the current pipeline in worker/tasks.py:
+    download → Whisper (locked) → OpenAI fallback transcription →
+    OpenAI gpt-5-nano cleanup → send result
+
+Covers:
+- Success path and result dict shape
+- File size validation (metadata and downloaded bytes)
+- Whisper failure → OpenAI fallback transcription
+- Cleanup failures (token limit, generic) and empty-cleanup fallback
+- Temp file cleanup on success and failure
+- Error message mapping
+- Whisper distributed lock behaviour
+- _transcribe_with_whisper error handling
+- _run_async in and out of a running event loop
 """
 
+import asyncio
 import os
-import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch, mock_open
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import fakeredis
+import httpx
 import pytest
 import respx
 from httpx import Response
 
+import worker.tasks as worker_tasks
+
+
+RAW_TRANSCRIPT = "this is the raw transcribed text"
+CLEANED_TRANSCRIPT = "This is the raw transcribed text."
+WHISPER_URL = worker_tasks.WHISPER_URL
+
 
 # =============================================================================
-# Fixtures for Task Tests
+# Fixtures
 # =============================================================================
 
 @pytest.fixture(scope="function")
-def mock_whisper_client():
-    """Mock Whisper client for transcription."""
-    with patch("tasks.WhisperClient") as mock_class:
-        mock_instance = Mock()
-        mock_instance.transcribe = AsyncMock(return_value={
-            "text": "This is the transcribed text",
-            "language": "en",
-            "duration": 5.0,
+def lock_redis() -> fakeredis.FakeRedis:
+    """Fake Redis in str mode, mirroring worker.tasks' production client
+    (redis.from_url(..., decode_responses=True)) used for the Whisper lock."""
+    return fakeredis.FakeRedis(decode_responses=True)
+
+
+@pytest.fixture(scope="function")
+def telegram_client_cls() -> MagicMock:
+    """Patch worker.tasks.TelegramClient with a fully mocked instance."""
+    with patch.object(worker_tasks, "TelegramClient") as mock_cls:
+        instance = MagicMock()
+        instance.get_file = AsyncMock(return_value={
+            "file_id": "voice_file_123",
+            "file_path": "voice/file_123.oga",
+            "file_size": 1024,
         })
-        mock_class.return_value = mock_instance
-        yield mock_instance
+        instance.download_file = AsyncMock(return_value=b"fake_audio_data")
+        instance.send_message = AsyncMock(return_value={"ok": True, "result": {"message_id": 999}})
+        instance.close = AsyncMock()
+        mock_cls.return_value = instance
+        yield mock_cls
 
 
 @pytest.fixture(scope="function")
-def mock_kimi_client():
-    """Mock Kimi client for formatting."""
-    with patch("tasks.KimiClient") as mock_class:
-        mock_instance = Mock()
-        mock_instance.format_transcription = AsyncMock(return_value="Formatted text")
-        mock_class.return_value = mock_instance
-        yield mock_instance
+def cleanup_client_cls() -> MagicMock:
+    """Patch worker.tasks.OpenAICleanupClient with a mocked instance."""
+    with patch.object(worker_tasks, "OpenAICleanupClient") as mock_cls:
+        instance = MagicMock()
+        instance.cleanup_transcript = AsyncMock(return_value=CLEANED_TRANSCRIPT)
+        instance.close = AsyncMock()
+        mock_cls.return_value = instance
+        yield mock_cls
 
 
 @pytest.fixture(scope="function")
-def mock_telegram_async_client():
-    """Mock async Telegram client."""
-    with patch("tasks.send_message", new_callable=AsyncMock) as mock:
-        mock.return_value = {"ok": True, "result": {"message_id": 999}}
-        yield mock
+def whisper_ok(respx_mock: respx.MockRouter) -> respx.MockRouter:
+    """Whisper ASR returns plain-text transcript."""
+    respx_mock.post(WHISPER_URL).mock(
+        return_value=Response(200, text=RAW_TRANSCRIPT)
+    )
+    return respx_mock
 
 
 @pytest.fixture(scope="function")
-def mock_telegram_download():
-    """Mock Telegram file download."""
-    with patch("tasks.download_voice_file", new_callable=AsyncMock) as mock:
-        mock.return_value = b"fake_audio_content"
-        yield mock
-
-
-@pytest.fixture(scope="function")
-def mock_temp_file():
-    """Mock temp file operations."""
-    with patch("tempfile.NamedTemporaryFile") as mock:
-        mock_file = Mock()
-        mock_file.name = "/tmp/test_voice.oga"
-        mock.return_value.__enter__ = Mock(return_value=mock_file)
-        mock.return_value.__exit__ = Mock(return_value=False)
-        yield mock
+def whisper_down(respx_mock: respx.MockRouter) -> respx.MockRouter:
+    """Whisper ASR returns 500."""
+    respx_mock.post(WHISPER_URL).mock(
+        return_value=Response(500, text="Internal Server Error")
+    )
+    return respx_mock
 
 
 # =============================================================================
@@ -80,132 +98,82 @@ def mock_temp_file():
 # =============================================================================
 
 @pytest.mark.asyncio
-class TestProcessVoiceNoteSuccess:
-    """Tests for successful voice note processing."""
-    
+class TestSuccessfulProcessing:
+    """Tests for the successful processing flow."""
+
     async def test_successful_processing_flow(
         self,
         respx_mock: respx.MockRouter,
-        mock_telegram_download: Mock,
-        mock_telegram_async_client: Mock,
-        temp_dir: Path,
+        telegram_client_cls: MagicMock,
+        cleanup_client_cls: MagicMock,
+        lock_redis: fakeredis.FakeRedis,
     ):
-        """Test complete successful processing flow."""
-        # Mock Whisper service
-        whisper_url = os.getenv("WHISPER_URL", "http://localhost:9000/asr")
-        respx_mock.post(whisper_url).mock(
-            return_value=Response(
-                200,
-                json={
-                    "text": "This is the transcribed text from Whisper",
-                    "language": "en",
-                    "duration": 5.0,
-                }
-            )
+        """Full flow returns success dict, sends cleaned text, removes temp file."""
+        whisper_ok = respx_mock.post(WHISPER_URL).mock(
+            return_value=Response(200, text=RAW_TRANSCRIPT)
         )
-        
-        # Mock Kimi API
-        respx_mock.post("https://api.moonshot.cn/v1/chat/completions").mock(
-            return_value=Response(
-                200,
-                json={
-                    "choices": [{"message": {"content": "Formatted transcription"}}]
-                }
-            )
-        )
-        
-        with patch("tasks.TEMP_DIR", str(temp_dir)):
-            with patch("tasks.send_message", mock_telegram_async_client):
-                from tasks import process_voice_note
-                
-                result = await process_voice_note(
-                    file_id="voice_file_123",
-                    chat_id=12345,
-                    message_id=42,
+
+        removed_paths = []
+        real_remove = os.remove
+
+        def tracking_remove(path, *args, **kwargs):
+            removed_paths.append(str(path))
+            return real_remove(path, *args, **kwargs)
+
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            with patch.object(worker_tasks.os, "remove", side_effect=tracking_remove):
+                result = worker_tasks.process_voice_note(
+                    file_id="voice_file_123", chat_id=12345, message_id=42,
                 )
-                
-                assert result is True
-                mock_telegram_async_client.assert_called()
-    
-    async def test_file_download_success(
+
+        assert result == {
+            "success": True,
+            "provider": "whisper",
+            "transcript_length": len(RAW_TRANSCRIPT),
+            "cleaned_length": len(CLEANED_TRANSCRIPT),
+        }
+        assert whisper_ok.called
+        telegram_client_cls.return_value.send_message.assert_awaited_once_with(
+            chat_id=12345, text=CLEANED_TRANSCRIPT,
+        )
+        # Temp file was created and then removed by the finally block.
+        assert len(removed_paths) == 1
+        assert not Path(removed_paths[0]).exists()
+
+    async def test_empty_cleanup_falls_back_to_raw_transcript(
         self,
-        respx_mock: respx.MockRouter,
-        temp_dir: Path,
+        whisper_ok: respx.MockRouter,
+        telegram_client_cls: MagicMock,
+        cleanup_client_cls: MagicMock,
+        lock_redis: fakeredis.FakeRedis,
     ):
-        """Test voice file is downloaded successfully."""
-        # Mock getFile endpoint
-        base_url = "https://api.telegram.org/bottest_token_12345"
-        respx_mock.post(f"{base_url}/getFile").mock(
-            return_value=Response(
-                200,
-                json={
-                    "ok": True,
-                    "result": {
-                        "file_id": "voice_file_123",
-                        "file_path": "voice/file_123.oga",
-                        "file_size": 1024,
-                    }
-                }
+        """If cleanup returns empty, the raw transcript is sent instead."""
+        cleanup_client_cls.return_value.cleanup_transcript = AsyncMock(return_value="")
+
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            result = worker_tasks.process_voice_note(
+                file_id="voice_file_123", chat_id=12345,
             )
-        )
-        
-        # Mock file download
-        respx_mock.get(f"{base_url}/file/bottest_token_12345/voice/file_123.oga").mock(
-            return_value=Response(200, content=b"fake_audio_data")
-        )
-        
-        with patch("tasks.TEMP_DIR", str(temp_dir)):
-            from tasks import download_voice_file
-            
-            content = await download_voice_file("voice_file_123")
-            assert content == b"fake_audio_data"
-    
-    async def test_whisper_transcription_success(
+
+        assert result["success"] is True
+        _, kwargs = telegram_client_cls.return_value.send_message.call_args
+        assert kwargs["text"] == RAW_TRANSCRIPT
+
+    async def test_missing_file_path_returns_failure(
         self,
-        respx_mock: respx.MockRouter,
-        temp_audio_file: Path,
+        telegram_client_cls: MagicMock,
+        cleanup_client_cls: MagicMock,
     ):
-        """Test Whisper transcription succeeds."""
-        whisper_url = os.getenv("WHISPER_URL", "http://localhost:9000/asr")
-        respx_mock.post(whisper_url).mock(
-            return_value=Response(
-                200,
-                json={
-                    "text": "Transcribed text from Whisper",
-                    "language": "en",
-                    "duration": 5.0,
-                }
-            )
+        """get_file without file_path fails fast with a general error message."""
+        telegram_client_cls.return_value.get_file = AsyncMock(return_value={})
+
+        result = worker_tasks.process_voice_note(
+            file_id="voice_file_123", chat_id=12345,
         )
-        
-        from tasks import transcribe_with_whisper
-        
-        result = await transcribe_with_whisper(temp_audio_file)
-        
-        assert result["text"] == "Transcribed text from Whisper"
-        assert result["language"] == "en"
-    
-    async def test_kimi_formatting_success(
-        self,
-        respx_mock: respx.MockRouter,
-    ):
-        """Test Kimi API formatting succeeds."""
-        respx_mock.post("https://api.moonshot.cn/v1/chat/completions").mock(
-            return_value=Response(
-                200,
-                json={
-                    "choices": [{
-                        "message": {"content": "Formatted transcription with proper punctuation."}
-                    }]
-                }
-            )
-        )
-        
-        from tasks import format_with_kimi
-        
-        result = await format_with_kimi("raw transcription text")
-        
-        assert result == "Formatted transcription with proper punctuation."
+
+        assert result == {"success": False, "error": "failed_to_get_file_path"}
+        _, kwargs = telegram_client_cls.return_value.send_message.call_args
+        assert kwargs["text"] == worker_tasks.ERROR_GENERAL
 
 
 # =============================================================================
@@ -214,282 +182,219 @@ class TestProcessVoiceNoteSuccess:
 
 @pytest.mark.asyncio
 class TestFileSizeValidation:
-    """Tests for file size validation (>20MB rejected)."""
-    
-    async def test_large_file_rejected(
+    """Tests for file size validation (max 20MB)."""
+
+    async def test_metadata_file_too_large_rejected_before_download(
         self,
-        temp_large_file: Path,
-        mock_telegram_async_client: Mock,
-    ):
-        """Test files >20MB are rejected."""
-        from tasks import validate_file_size, MAX_FILE_SIZE_BYTES
-        
-        # File is 21MB, which exceeds 20MB limit
-        assert temp_large_file.stat().st_size > MAX_FILE_SIZE_BYTES
-        
-        is_valid = validate_file_size(temp_large_file.stat().st_size)
-        assert is_valid is False
-    
-    async def test_valid_file_size_accepted(
-        self,
-        temp_audio_file: Path,
-    ):
-        """Test files under 20MB are accepted."""
-        from tasks import validate_file_size, MAX_FILE_SIZE_BYTES
-        
-        # File is small
-        assert temp_audio_file.stat().st_size < MAX_FILE_SIZE_BYTES
-        
-        is_valid = validate_file_size(temp_audio_file.stat().st_size)
-        assert is_valid is True
-    
-    async def test_large_file_sends_error_message(
-        self,
+        telegram_client_cls: MagicMock,
+        cleanup_client_cls: MagicMock,
         respx_mock: respx.MockRouter,
-        temp_large_file: Path,
-        mock_telegram_async_client: Mock,
     ):
-        """Test that large file sends error message to user."""
-        base_url = "https://api.telegram.org/bottest_token_12345"
-        respx_mock.post(f"{base_url}/sendMessage").mock(
-            return_value=Response(200, json={"ok": True})
+        """A file too large per Telegram metadata is rejected without download."""
+        telegram_client_cls.return_value.get_file = AsyncMock(return_value={
+            "file_path": "voice/big.oga",
+            "file_size": worker_tasks.MAX_FILE_SIZE_BYTES + 1,
+        })
+        download_route = respx_mock.post(url__startswith="https://api.telegram.org").mock(
+            return_value=Response(200, json={"ok": True, "result": {}})
         )
-        
-        with patch("tasks.send_message", mock_telegram_async_client):
-            from tasks import handle_oversized_file
-            
-            await handle_oversized_file(chat_id=12345)
-            
-            mock_telegram_async_client.assert_called_once()
-            call_args = mock_telegram_async_client.call_args
-            assert "20MB" in call_args.kwargs.get("text", "")
+
+        result = worker_tasks.process_voice_note(
+            file_id="voice_file_123", chat_id=12345,
+        )
+
+        assert result == {"success": False, "error": "file_too_large"}
+        telegram_client_cls.return_value.download_file.assert_not_awaited()
+        _, kwargs = telegram_client_cls.return_value.send_message.call_args
+        assert kwargs["text"] == worker_tasks.ERROR_FILE_TOO_LARGE
+        assert not download_route.called
+
+    async def test_downloaded_file_too_large_rejected_before_transcription(
+        self,
+        telegram_client_cls: MagicMock,
+        cleanup_client_cls: MagicMock,
+        lock_redis: fakeredis.FakeRedis,
+        respx_mock: respx.MockRouter,
+    ):
+        """Content larger than the limit is rejected after download, before Whisper."""
+        telegram_client_cls.return_value.download_file = AsyncMock(
+            return_value=b"0" * (worker_tasks.MAX_FILE_SIZE_BYTES + 1)
+        )
+        whisper_route = respx_mock.post(WHISPER_URL).mock(
+            return_value=Response(200, text=RAW_TRANSCRIPT)
+        )
+
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            result = worker_tasks.process_voice_note(
+                file_id="voice_file_123", chat_id=12345,
+            )
+
+        assert result == {"success": False, "error": "file_too_large"}
+        assert not whisper_route.called
+        _, kwargs = telegram_client_cls.return_value.send_message.call_args
+        assert kwargs["text"] == worker_tasks.ERROR_FILE_TOO_LARGE
 
 
 # =============================================================================
-# Whisper Service Failure Tests
+# Transcription Fallback Tests
 # =============================================================================
 
 @pytest.mark.asyncio
-class TestWhisperFailures:
-    """Tests for Whisper service failure handling."""
-    
-    async def test_whisper_service_500_error(
+class TestTranscriptionFallback:
+    """Tests for Whisper-primary, OpenAI-fallback transcription."""
+
+    async def test_whisper_failure_falls_back_to_openai(
+        self,
+        whisper_down: respx.MockRouter,
+        telegram_client_cls: MagicMock,
+        cleanup_client_cls: MagicMock,
+        lock_redis: fakeredis.FakeRedis,
+    ):
+        """When Whisper fails, the OpenAI transcription client is used."""
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            with patch.object(worker_tasks, "OpenAITranscriptionClient") as mock_cls:
+                instance = MagicMock()
+                instance.transcribe = MagicMock(return_value=RAW_TRANSCRIPT)
+                instance.close = MagicMock()
+                mock_cls.return_value = instance
+
+                result = worker_tasks.process_voice_note(
+                    file_id="voice_file_123", chat_id=12345,
+                )
+
+        assert result["success"] is True
+        assert result["provider"] == "openai"
+        mock_cls.return_value.transcribe.assert_called_once()
+
+    async def test_no_openai_fallback_without_api_key(
+        self,
+        whisper_down: respx.MockRouter,
+        telegram_client_cls: MagicMock,
+        cleanup_client_cls: MagicMock,
+        lock_redis: fakeredis.FakeRedis,
+    ):
+        """Without OPENAI_API_KEY, failed Whisper leads to transcription_empty."""
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            with patch.object(worker_tasks, "OPENAI_API_KEY", ""):
+                result = worker_tasks.process_voice_note(
+                    file_id="voice_file_123", chat_id=12345,
+                )
+
+        assert result == {"success": False, "error": "transcription_empty"}
+        _, kwargs = telegram_client_cls.return_value.send_message.call_args
+        assert kwargs["text"] == worker_tasks.ERROR_WHISPER_FAILED
+
+    async def test_both_providers_failing_returns_transcription_empty(
+        self,
+        whisper_down: respx.MockRouter,
+        telegram_client_cls: MagicMock,
+        cleanup_client_cls: MagicMock,
+        lock_redis: fakeredis.FakeRedis,
+    ):
+        """When both Whisper and OpenAI fail, the user gets the whisper error."""
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            with patch.object(worker_tasks, "OpenAITranscriptionClient") as mock_cls:
+                mock_cls.return_value.transcribe.side_effect = Exception("OpenAI down")
+
+                result = worker_tasks.process_voice_note(
+                    file_id="voice_file_123", chat_id=12345,
+                )
+
+        assert result == {"success": False, "error": "transcription_empty"}
+
+    async def test_empty_whisper_text_falls_back_to_openai(
         self,
         respx_mock: respx.MockRouter,
-        temp_audio_file: Path,
+        telegram_client_cls: MagicMock,
+        cleanup_client_cls: MagicMock,
+        lock_redis: fakeredis.FakeRedis,
     ):
-        """Test Whisper 500 error triggers retry exception."""
-        whisper_url = os.getenv("WHISPER_URL", "http://localhost:9000/asr")
-        respx_mock.post(whisper_url).mock(
-            return_value=Response(500, text="Internal Server Error")
-        )
-        
-        from tasks import transcribe_with_whisper, TranscriptionError
-        
-        with pytest.raises(TranscriptionError) as exc_info:
-            await transcribe_with_whisper(temp_audio_file)
-        
-        assert "retry" in str(exc_info.value).lower() or "whisper" in str(exc_info.value).lower()
-    
-    async def test_whisper_service_timeout(
-        self,
-        respx_mock: respx.MockRouter,
-        temp_audio_file: Path,
-    ):
-        """Test Whisper timeout triggers retry."""
-        whisper_url = os.getenv("WHISPER_URL", "http://localhost:9000/asr")
-        respx_mock.post(whisper_url).mock(side_effect=Exception("Connection timeout"))
-        
-        from tasks import transcribe_with_whisper, TranscriptionError
-        
-        with pytest.raises(TranscriptionError):
-            await transcribe_with_whisper(temp_audio_file)
-    
-    async def test_whisper_invalid_response(
-        self,
-        respx_mock: respx.MockRouter,
-        temp_audio_file: Path,
-    ):
-        """Test Whisper invalid JSON response triggers error."""
-        whisper_url = os.getenv("WHISPER_URL", "http://localhost:9000/asr")
-        respx_mock.post(whisper_url).mock(
-            return_value=Response(200, text="not valid json")
-        )
-        
-        from tasks import transcribe_with_whisper, TranscriptionError
-        
-        with pytest.raises(TranscriptionError):
-            await transcribe_with_whisper(temp_audio_file)
-    
-    async def test_whisper_empty_response(
-        self,
-        respx_mock: respx.MockRouter,
-        temp_audio_file: Path,
-    ):
-        """Test Whisper empty text response."""
-        whisper_url = os.getenv("WHISPER_URL", "http://localhost:9000/asr")
-        respx_mock.post(whisper_url).mock(
-            return_value=Response(200, json={"text": "", "language": "en"})
-        )
-        
-        from tasks import transcribe_with_whisper
-        
-        result = await transcribe_with_whisper(temp_audio_file)
-        assert result["text"] == ""
+        """Whisper returning empty text counts as no transcript → OpenAI fallback."""
+        respx_mock.post(WHISPER_URL).mock(return_value=Response(200, text="   "))
+
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            with patch.object(worker_tasks, "OpenAITranscriptionClient") as mock_cls:
+                mock_cls.return_value.transcribe = MagicMock(return_value=RAW_TRANSCRIPT)
+
+                result = worker_tasks.process_voice_note(
+                    file_id="voice_file_123", chat_id=12345,
+                )
+
+        assert result["success"] is True
+        assert result["provider"] == "openai"
 
 
 # =============================================================================
-# Kimi API Failure Tests
-# =============================================================================
-
-@pytest.mark.asyncio
-class TestKimiFailures:
-    """Tests for Kimi API failure handling."""
-    
-    async def test_kimi_api_401_error(
-        self,
-        respx_mock: respx.MockRouter,
-    ):
-        """Test Kimi 401 error triggers retry."""
-        respx_mock.post("https://api.moonshot.cn/v1/chat/completions").mock(
-            return_value=Response(
-                401,
-                json={"error": {"message": "Invalid API key", "type": "authentication_error"}}
-            )
-        )
-        
-        from tasks import format_with_kimi, FormattingError
-        
-        with pytest.raises(FormattingError):
-            await format_with_kimi("raw text")
-    
-    async def test_kimi_api_429_rate_limit(
-        self,
-        respx_mock: respx.MockRouter,
-    ):
-        """Test Kimi rate limit triggers retry."""
-        respx_mock.post("https://api.moonshot.cn/v1/chat/completions").mock(
-            return_value=Response(
-                429,
-                json={"error": {"message": "Rate limit exceeded", "type": "rate_limit_error"}}
-            )
-        )
-        
-        from tasks import format_with_kimi, FormattingError
-        
-        with pytest.raises(FormattingError) as exc_info:
-            await format_with_kimi("raw text")
-        
-        assert "rate" in str(exc_info.value).lower() or "retry" in str(exc_info.value).lower()
-    
-    async def test_kimi_api_500_error(
-        self,
-        respx_mock: respx.MockRouter,
-    ):
-        """Test Kimi 500 error triggers retry."""
-        respx_mock.post("https://api.moonshot.cn/v1/chat/completions").mock(
-            return_value=Response(500, text="Internal Server Error")
-        )
-        
-        from tasks import format_with_kimi, FormattingError
-        
-        with pytest.raises(FormattingError):
-            await format_with_kimi("raw text")
-    
-    async def test_kimi_timeout(
-        self,
-        respx_mock: respx.MockRouter,
-    ):
-        """Test Kimi timeout triggers retry."""
-        respx_mock.post("https://api.moonshot.cn/v1/chat/completions").mock(
-            side_effect=Exception("Request timeout")
-        )
-        
-        from tasks import format_with_kimi, FormattingError
-        
-        with pytest.raises(FormattingError):
-            await format_with_kimi("raw text")
-
-
-# =============================================================================
-# Telegram Send Failure Tests
+# Cleanup Failure Tests
 # =============================================================================
 
 @pytest.mark.asyncio
-class TestTelegramSendFailures:
-    """Tests for Telegram send failure handling."""
-    
-    async def test_telegram_send_403_forbidden(
+class TestCleanupFailures:
+    """Tests for OpenAI cleanup failure handling."""
+
+    async def test_cleanup_token_limit_sends_specific_error_and_reraises(
         self,
-        respx_mock: respx.MockRouter,
+        whisper_ok: respx.MockRouter,
+        telegram_client_cls: MagicMock,
+        cleanup_client_cls: MagicMock,
+        lock_redis: fakeredis.FakeRedis,
     ):
-        """Test Telegram 403 error (bot blocked by user)."""
-        base_url = "https://api.telegram.org/bottest_token_12345"
-        respx_mock.post(f"{base_url}/sendMessage").mock(
-            return_value=Response(
-                403,
-                json={"ok": False, "description": "Forbidden: bot was blocked by the user"}
+        """A token-limit cleanup error sends the token-limit message and re-raises."""
+        from shared import OpenAICleanupError
+
+        cleanup_client_cls.return_value.cleanup_transcript = AsyncMock(
+            side_effect=OpenAICleanupError("token_limit_exceeded", error_code=413)
+        )
+
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            with pytest.raises(OpenAICleanupError):
+                worker_tasks.process_voice_note(
+                    file_id="voice_file_123", chat_id=12345,
+                )
+
+        _, kwargs = telegram_client_cls.return_value.send_message.call_args
+        assert kwargs["text"] == worker_tasks.ERROR_CLEANUP_TOKEN_LIMIT
+
+    async def test_cleanup_generic_error_sends_general_error_and_reraises(
+        self,
+        whisper_ok: respx.MockRouter,
+        telegram_client_cls: MagicMock,
+        cleanup_client_cls: MagicMock,
+        lock_redis: fakeredis.FakeRedis,
+    ):
+        """A generic cleanup error sends the general message and re-raises."""
+        from shared import OpenAICleanupError
+
+        cleanup_client_cls.return_value.cleanup_transcript = AsyncMock(
+            side_effect=OpenAICleanupError("boom", error_code=500)
+        )
+
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            with pytest.raises(OpenAICleanupError):
+                worker_tasks.process_voice_note(
+                    file_id="voice_file_123", chat_id=12345,
+                )
+
+        _, kwargs = telegram_client_cls.return_value.send_message.call_args
+        assert kwargs["text"] == worker_tasks.ERROR_GENERAL
+
+    async def test_unexpected_error_sends_general_error_and_reraises(
+        self,
+        telegram_client_cls: MagicMock,
+        cleanup_client_cls: MagicMock,
+    ):
+        """An unexpected exception sends an error message and re-raises for RQ retry."""
+        telegram_client_cls.return_value.get_file = AsyncMock(
+            side_effect=RuntimeError("network exploded")
+        )
+
+        with pytest.raises(RuntimeError):
+            worker_tasks.process_voice_note(
+                file_id="voice_file_123", chat_id=12345,
             )
-        )
-        
-        from tasks import send_transcription_result
-        
-        # Should not raise, but log the error
-        result = await send_transcription_result(chat_id=12345, text="Test")
-        # Function handles gracefully
-    
-    async def test_telegram_send_400_bad_request(
-        self,
-        respx_mock: respx.MockRouter,
-    ):
-        """Test Telegram 400 error (message too long, etc)."""
-        base_url = "https://api.telegram.org/bottest_token_12345"
-        respx_mock.post(f"{base_url}/sendMessage").mock(
-            return_value=Response(
-                400,
-                json={"ok": False, "description": "Bad Request: message is too long"}
-            )
-        )
-        
-        from tasks import send_transcription_result
-        
-        result = await send_transcription_result(chat_id=12345, text="x" * 5000)
-    
-    async def test_telegram_send_timeout(
-        self,
-        respx_mock: respx.MockRouter,
-    ):
-        """Test Telegram send timeout."""
-        base_url = "https://api.telegram.org/bottest_token_12345"
-        respx_mock.post(f"{base_url}/sendMessage").mock(
-            side_effect=Exception("Connection timeout")
-        )
-        
-        from tasks import send_transcription_result
-        
-        # Should handle gracefully
-        result = await send_transcription_result(chat_id=12345, text="Test")
-    
-    async def test_long_message_splitting(
-        self,
-        respx_mock: respx.MockRouter,
-    ):
-        """Test long messages are split correctly."""
-        base_url = "https://api.telegram.org/bottest_token_12345"
-        respx_mock.post(f"{base_url}/sendMessage").mock(
-            return_value=Response(200, json={"ok": True})
-        )
-        
-        from tasks import send_transcription_result, MAX_MESSAGE_LENGTH
-        
-        long_text = "x" * (MAX_MESSAGE_LENGTH + 100)
-        
-        with patch("tasks.send_message", new_callable=AsyncMock) as mock_send:
-            mock_send.return_value = {"ok": True}
-            await send_transcription_result(chat_id=12345, text=long_text)
-            
-            # Should be called twice due to splitting
-            assert mock_send.call_count == 2
+
+        _, kwargs = telegram_client_cls.return_value.send_message.call_args
+        assert kwargs["text"] == worker_tasks.ERROR_GENERAL
 
 
 # =============================================================================
@@ -498,139 +403,195 @@ class TestTelegramSendFailures:
 
 @pytest.mark.asyncio
 class TestTempFileCleanup:
-    """Tests for temporary file cleanup."""
-    
-    async def test_temp_file_cleaned_up_on_success(
+    """Tests for temporary file cleanup guarantees."""
+
+    async def test_cleanup_failure_does_not_mask_success(
         self,
-        temp_dir: Path,
+        whisper_ok: respx.MockRouter,
+        telegram_client_cls: MagicMock,
+        cleanup_client_cls: MagicMock,
+        lock_redis: fakeredis.FakeRedis,
     ):
-        """Test temp files are cleaned up after successful processing."""
-        temp_file = temp_dir / "test_voice.oga"
-        temp_file.write_text("fake content")
-        
-        from tasks import cleanup_temp_file
-        
-        await cleanup_temp_file(temp_file)
-        
-        assert not temp_file.exists()
-    
-    async def test_temp_file_cleaned_up_on_failure(
-        self,
-        temp_dir: Path,
-    ):
-        """Test temp files are cleaned up even on processing failure."""
-        temp_file = temp_dir / "test_voice.oga"
-        temp_file.write_text("fake content")
-        
-        from tasks import cleanup_temp_file
-        
-        with patch("tasks.logger") as mock_logger:
-            await cleanup_temp_file(temp_file)
-            
-        assert not temp_file.exists()
-    
-    async def test_cleanup_nonexistent_file_does_not_raise(
-        self,
-        temp_dir: Path,
-    ):
-        """Test cleanup of non-existent file doesn't raise error."""
-        nonexistent_file = temp_dir / "does_not_exist.oga"
-        
-        from tasks import cleanup_temp_file
-        
-        # Should not raise
-        await cleanup_temp_file(nonexistent_file)
-    
-    async def test_cleanup_handles_permission_error(
-        self,
-        temp_dir: Path,
-    ):
-        """Test cleanup handles permission errors gracefully."""
-        temp_file = temp_dir / "test_voice.oga"
-        temp_file.write_text("fake content")
-        
-        from tasks import cleanup_temp_file
-        
-        with patch.object(temp_file, "unlink", side_effect=PermissionError("Access denied")):
-            with patch("tasks.logger") as mock_logger:
-                # Should not raise, just log warning
-                await cleanup_temp_file(temp_file)
+        """A temp-file removal failure is logged but does not fail the job."""
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            with patch.object(worker_tasks.os, "remove", side_effect=PermissionError("nope")):
+                result = worker_tasks.process_voice_note(
+                    file_id="voice_file_123", chat_id=12345,
+                )
+
+        assert result["success"] is True
 
 
 # =============================================================================
-# Retry Logic Tests
+# Error Message Mapping Tests
 # =============================================================================
 
-class TestRetryLogic:
-    """Tests for retry logic with exponential backoff."""
-    
-    def test_retry_config_values(self):
-        """Test retry configuration is loaded correctly."""
-        from tasks import MAX_RETRIES, RETRY_DELAY_SECONDS
-        
-        assert MAX_RETRIES == 3
-        assert isinstance(RETRY_DELAY_SECONDS, (list, tuple))
-        assert len(RETRY_DELAY_SECONDS) == 3
-    
-    def test_retry_delay_calculation(self):
-        """Test retry delay calculation."""
-        from tasks import get_retry_delay
-        
-        assert get_retry_delay(0) == 60  # First retry
-        assert get_retry_delay(1) == 300  # Second retry
-        assert get_retry_delay(2) == 600  # Third retry
-        assert get_retry_delay(3) == 600  # Beyond configured delays, use last
+class TestErrorMessageMapping:
+    """Tests for _get_error_message_for_exception."""
+
+    def test_token_limit_string_maps_to_token_limit_message(self):
+        assert worker_tasks._get_error_message_for_exception(
+            Exception("token_limit_exceeded for input")
+        ) == worker_tasks.ERROR_CLEANUP_TOKEN_LIMIT
+
+    def test_cleanup_error_413_maps_to_token_limit_message(self):
+        from shared import OpenAICleanupError
+
+        assert worker_tasks._get_error_message_for_exception(
+            OpenAICleanupError("too long", error_code=413)
+        ) == worker_tasks.ERROR_CLEANUP_TOKEN_LIMIT
+
+    def test_whisper_error_maps_to_whisper_message(self):
+        assert worker_tasks._get_error_message_for_exception(
+            Exception("Whisper transcription failed: HTTP 500")
+        ) == worker_tasks.ERROR_WHISPER_FAILED
+
+    def test_size_error_maps_to_file_too_large_message(self):
+        assert worker_tasks._get_error_message_for_exception(
+            Exception("File too large to process")
+        ) == worker_tasks.ERROR_FILE_TOO_LARGE
+
+    def test_unknown_error_maps_to_general_message(self):
+        assert worker_tasks._get_error_message_for_exception(
+            Exception("mysterious failure")
+        ) == worker_tasks.ERROR_GENERAL
 
 
 # =============================================================================
-# Integration Points Tests
+# Whisper Lock Tests
 # =============================================================================
 
-@pytest.mark.asyncio
-class TestIntegrationPoints:
-    """Tests for integration between components."""
-    
-    async def test_process_voice_note_calls_all_steps(
+class TestWhisperLock:
+    """Tests for the distributed Whisper lock."""
+
+    def test_acquire_and_release(self, lock_redis: fakeredis.FakeRedis):
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            lock = worker_tasks.WhisperLock(timeout=60)
+
+            assert lock.acquire() is True
+            assert lock.acquired is True
+            assert lock_redis.get(worker_tasks.WhisperLock.LOCK_KEY) == lock.lock_value
+
+            lock.release()
+            assert lock.acquired is False
+            assert lock_redis.get(worker_tasks.WhisperLock.LOCK_KEY) is None
+
+    def test_release_only_when_owner(self, lock_redis: fakeredis.FakeRedis):
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            lock_redis.set(worker_tasks.WhisperLock.LOCK_KEY, "held-by-someone-else")
+
+            lock = worker_tasks.WhisperLock()
+            lock.lock_value = "my-value"
+            lock.acquired = True
+            lock.release()
+
+            # Foreign lock must remain untouched.
+            assert lock_redis.get(worker_tasks.WhisperLock.LOCK_KEY) == "held-by-someone-else"
+
+    def test_acquire_fallback_without_redis(self):
+        with patch.object(worker_tasks, "redis_client", None):
+            lock = worker_tasks.WhisperLock()
+            assert lock.acquire() is True
+
+    def test_acquire_returns_false_when_locked(self, lock_redis: fakeredis.FakeRedis):
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            lock_redis.set(worker_tasks.WhisperLock.LOCK_KEY, "held")
+
+            lock = worker_tasks.WhisperLock()
+            assert lock.acquire() is False
+
+    def test_retry_gives_up_after_max_wait(self, lock_redis: fakeredis.FakeRedis):
+        """When the lock can't be acquired in time, an unlocked lock is returned
+        as a fallback so processing can proceed anyway."""
+        lock_redis.set(worker_tasks.WhisperLock.LOCK_KEY, "held")
+
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            with patch.object(worker_tasks.time, "sleep") as mock_sleep:
+                lock = worker_tasks._acquire_whisper_lock_with_retry(max_wait=0)
+
+        assert lock.acquired is False
+        mock_sleep.assert_not_called()
+
+
+# =============================================================================
+# Whisper HTTP Client Tests
+# =============================================================================
+
+class TestTranscribeWithWhisper:
+    """Tests for the _transcribe_with_whisper HTTP helper."""
+
+    def test_success_returns_text(
         self,
-        temp_dir: Path,
+        respx_mock: respx.MockRouter,
+        temp_audio_file: Path,
+        lock_redis: fakeredis.FakeRedis,
     ):
-        """Test process_voice_note calls all processing steps."""
-        with patch("tasks.download_voice_file", new_callable=AsyncMock) as mock_download:
-            with patch("tasks.transcribe_with_whisper", new_callable=AsyncMock) as mock_transcribe:
-                with patch("tasks.format_with_kimi", new_callable=AsyncMock) as mock_format:
-                    with patch("tasks.send_transcription_result", new_callable=AsyncMock) as mock_send:
-                        with patch("tasks.cleanup_temp_file", new_callable=AsyncMock) as mock_cleanup:
-                            mock_download.return_value = b"audio_data"
-                            mock_transcribe.return_value = {"text": "raw text"}
-                            mock_format.return_value = "formatted text"
-                            mock_send.return_value = True
-                            
-                            with patch("tasks.TEMP_DIR", str(temp_dir)):
-                                from tasks import process_voice_note
-                                
-                                await process_voice_note("file_id", 12345, 42)
-                                
-                                mock_download.assert_called_once()
-                                mock_transcribe.assert_called_once()
-                                mock_format.assert_called_once()
-                                mock_send.assert_called_once()
-                                mock_cleanup.assert_called_once()
-    
-    async def test_error_in_download_skips_processing(
+        respx_mock.post(WHISPER_URL).mock(return_value=Response(200, text=RAW_TRANSCRIPT))
+
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            result = worker_tasks._transcribe_with_whisper(str(temp_audio_file))
+
+        assert result == RAW_TRANSCRIPT
+
+    def test_http_error_raises(
         self,
-        temp_dir: Path,
+        respx_mock: respx.MockRouter,
+        temp_audio_file: Path,
+        lock_redis: fakeredis.FakeRedis,
     ):
-        """Test that download error skips transcription and formatting."""
-        with patch("tasks.download_voice_file", new_callable=AsyncMock) as mock_download:
-            with patch("tasks.transcribe_with_whisper", new_callable=AsyncMock) as mock_transcribe:
-                with patch("tasks.send_error_message", new_callable=AsyncMock) as mock_error:
-                    mock_download.side_effect = Exception("Download failed")
-                    
-                    with patch("tasks.TEMP_DIR", str(temp_dir)):
-                        from tasks import process_voice_note
-                        
-                        await process_voice_note("file_id", 12345, 42)
-                        
-                        mock_download.assert_called_once()
-                        mock_transcribe.assert_not_called()
-                        mock_error.assert_called_once()
+        respx_mock.post(WHISPER_URL).mock(return_value=Response(500, text="error"))
+
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            with pytest.raises(Exception, match="HTTP 500"):
+                worker_tasks._transcribe_with_whisper(str(temp_audio_file))
+
+    def test_timeout_raises(
+        self,
+        respx_mock: respx.MockRouter,
+        temp_audio_file: Path,
+        lock_redis: fakeredis.FakeRedis,
+    ):
+        respx_mock.post(WHISPER_URL).mock(
+            side_effect=httpx.ReadTimeout("timed out")
+        )
+
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            with pytest.raises(Exception, match="timed out"):
+                worker_tasks._transcribe_with_whisper(str(temp_audio_file))
+
+    def test_empty_text_returns_none(
+        self,
+        respx_mock: respx.MockRouter,
+        temp_audio_file: Path,
+        lock_redis: fakeredis.FakeRedis,
+    ):
+        respx_mock.post(WHISPER_URL).mock(return_value=Response(200, text="   "))
+
+        with patch.object(worker_tasks, "redis_client", lock_redis):
+            result = worker_tasks._transcribe_with_whisper(str(temp_audio_file))
+
+        assert result is None
+
+
+# =============================================================================
+# _run_async Tests
+# =============================================================================
+
+class TestRunAsync:
+    """Tests for the sync/async bridge."""
+
+    def test_run_async_without_running_loop(self):
+        async def coro():
+            return "done"
+
+        assert worker_tasks._run_async(coro()) == "done"
+
+    @pytest.mark.asyncio
+    async def test_run_async_with_running_loop(self):
+        """Inside a running loop, _run_async bridges via a worker thread."""
+
+        async def coro():
+            await asyncio.sleep(0)
+            return 42
+
+        assert worker_tasks._run_async(coro()) == 42

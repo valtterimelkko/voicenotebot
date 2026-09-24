@@ -10,10 +10,12 @@ Tests end-to-end flows including:
 
 import asyncio
 import json
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from http import HTTPStatus
-from unittest.mock import AsyncMock, Mock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import fakeredis
 import pytest
@@ -153,6 +155,35 @@ class TestEndToEndFlow:
 
 
 # =============================================================================
+# RQ job helpers (module-level so RQ can resolve/pickle them)
+# =============================================================================
+
+_job_counters = {"current": 0, "max": 0}
+_job_results: list = []
+
+
+def _slow_tracking_job(duration):
+    _job_counters["current"] += 1
+    _job_counters["max"] = max(_job_counters["max"], _job_counters["current"])
+    time.sleep(duration)
+    _job_counters["current"] -= 1
+    return f"Completed after {duration}s"
+
+
+def _record_job_item(item):
+    _job_results.append(item)
+    return item
+
+
+def _double(item):
+    return item * 2
+
+
+def _success_result():
+    return "success_result"
+
+
+# =============================================================================
 # Concurrent Processing Tests
 # =============================================================================
 
@@ -171,22 +202,12 @@ class TestConcurrentProcessing:
         # Create queue with fake Redis
         queue = Queue(connection=fake_redis, is_async=False)  # Sync for testing
         
-        # Track concurrent execution
-        concurrent_count = 0
-        max_concurrent = 0
-        
-        def slow_job(duration):
-            nonlocal concurrent_count, max_concurrent
-            concurrent_count += 1
-            max_concurrent = max(max_concurrent, concurrent_count)
-            time.sleep(duration)
-            concurrent_count -= 1
-            return f"Completed after {duration}s"
+        _job_counters.update(current=0, max=0)
         
         # Enqueue multiple jobs
         jobs = []
         for i in range(5):
-            job = queue.enqueue(slow_job, 0.1)
+            job = queue.enqueue(_slow_tracking_job, 0.1)
             jobs.append(job)
         
         # Process all jobs
@@ -196,6 +217,7 @@ class TestConcurrentProcessing:
         # In sync mode, jobs run sequentially
         # In async mode with concurrency=2, max would be 2
         assert all(job.is_finished for job in jobs)
+        assert _job_counters["max"] == 1  # sequential in sync mode
     
     async def test_job_queue_ordering(
         self,
@@ -206,19 +228,15 @@ class TestConcurrentProcessing:
         
         queue = Queue(connection=fake_redis, is_async=False)
         
-        results = []
-        
-        def record_order(item):
-            results.append(item)
-            return item
+        _job_results.clear()
         
         # Enqueue items in order
         expected_order = ["first", "second", "third"]
         for item in expected_order:
-            queue.enqueue(record_order, item)
+            queue.enqueue(_record_job_item, item)
         
         # In sync mode, jobs execute immediately in order
-        assert results == expected_order
+        assert _job_results == expected_order
     
     async def test_job_dependencies(
         self,
@@ -301,7 +319,7 @@ class TestQueueUnderLoad:
         queue = Queue(connection=fake_redis, is_async=False)
         
         # Enqueue and process job
-        job = queue.enqueue(lambda: "success_result")
+        job = queue.enqueue(_success_result)
         
         # In sync mode, job executes immediately
         assert job.is_finished
@@ -602,17 +620,48 @@ class TestResourceManagement:
     
     async def test_temp_files_cleaned_after_processing(
         self,
+        respx_mock: respx.MockRouter,
         temp_dir,
     ):
         """Test temporary files are cleaned after job completes."""
-        temp_file = temp_dir / "test_voice.oga"
-        temp_file.write_bytes(b"fake_audio")
-        
-        from tasks import cleanup_temp_file
-        
-        await cleanup_temp_file(temp_file)
-        
-        assert not temp_file.exists()
+        import worker.tasks as worker_tasks
+
+        respx_mock.post("http://localhost:9000/asr").mock(
+            return_value=Response(200, text="raw transcript")
+        )
+
+        removed: list[str] = []
+        real_remove = os.remove
+
+        def tracking_remove(path, *args, **kwargs):
+            removed.append(str(path))
+            return real_remove(path, *args, **kwargs)
+
+        telegram_instance = MagicMock()
+        telegram_instance.get_file = AsyncMock(
+            return_value={"file_path": "voice/file_1.oga", "file_size": 1024}
+        )
+        telegram_instance.download_file = AsyncMock(return_value=b"fake_audio")
+        telegram_instance.send_message = AsyncMock(return_value={"ok": True})
+        telegram_instance.close = AsyncMock()
+        telegram_client_cls = MagicMock(return_value=telegram_instance)
+
+        cleanup_instance = MagicMock()
+        cleanup_instance.cleanup_transcript = AsyncMock(return_value="cleaned")
+        cleanup_instance.close = AsyncMock()
+        cleanup_client_cls = MagicMock(return_value=cleanup_instance)
+
+        with patch.object(worker_tasks, "TelegramClient", telegram_client_cls), \
+             patch.object(worker_tasks, "OpenAICleanupClient", cleanup_client_cls), \
+             patch.object(worker_tasks, "redis_client", None), \
+             patch.object(worker_tasks.os, "remove", side_effect=tracking_remove):
+            result = worker_tasks.process_voice_note(file_id="file_1", chat_id=1)
+
+        assert result["success"] is True
+        # The downloaded audio was written to exactly one temp file, and the
+        # finally-block cleanup removed it from disk.
+        assert len(removed) == 1
+        assert not Path(removed[0]).exists()
     
     async def test_redis_connections_closed(
         self,

@@ -89,17 +89,20 @@ class TestWebhookHandler:
         telegram_voice_update: dict,
     ):
         """Test that voice message triggers 'Transcribing...' notification."""
+        import asyncio
+
         with patch("webhook.main.enqueue_transcription_job", return_value="test_job_id_123"):
             with patch("webhook.main.send_transcribing_message", new_callable=AsyncMock) as mock_send:
                 response = await async_webhook_client.post(
                     "/webhook",
                     json=telegram_voice_update,
                 )
-                
+
                 assert response.status_code == HTTPStatus.OK
-                # Note: send_transcribing_message is called with create_task
-                # so we need to let the event loop process it
-                mock_send.assert_called_once_with(chat_id=12345)
+                # Note: send_transcribing_message is dispatched via create_task,
+                # so yield to the event loop to let the task run before asserting.
+                await asyncio.sleep(0)
+                mock_send.assert_called_once_with(12345)
     
     async def test_text_message_is_ignored(
         self,
@@ -346,6 +349,7 @@ class TestJobEnqueue:
                 file_id="file_123",
                 chat_id=12345,
                 message_id=42,
+                job_timeout=600,
             )
     
     def test_enqueue_failure_returns_none(self, mock_redis_client: Mock):
@@ -381,7 +385,10 @@ class TestRQIntegration:
             result = get_redis_connection()
             
             assert result == mock_instance
-            mock_redis_class.from_url.assert_called_once_with("redis://localhost:6379/15")
+            mock_redis_class.from_url.assert_called_once_with(
+                "redis://localhost:6379/15",
+                socket_connect_timeout=5,
+            )
     
     def test_get_queue(self):
         """Test RQ queue creation."""
@@ -411,13 +418,26 @@ class TestTelegramNotification:
     
     @respx.mock
     async def test_send_transcribing_message_success(self, mock_telegram_api: respx.MockRouter):
-        """Test sending 'Transcribing...' message succeeds."""
+        """Test sending 'Transcribing...' message succeeds.
+
+        send_transcribing_message returns None and swallows errors; verify the
+        Telegram sendMessage endpoint was actually called with the notice text.
+        """
         from webhook.main import send_transcribing_message
-        
+
+        send_route = mock_telegram_api.post(
+            "https://api.telegram.org/bottest_token_12345/sendMessage"
+        ).mock(
+            return_value=Response(
+                200,
+                json={"ok": True, "result": {"message_id": 999}},
+            )
+        )
+
         result = await send_transcribing_message(chat_id=12345)
-        
-        assert result["ok"] is True
-        assert "result" in result
+
+        assert result is None
+        assert send_route.called
     
     @respx.mock
     async def test_send_transcribing_message_failure_not_raised(self, mock_telegram_api: respx.MockRouter):

@@ -57,8 +57,12 @@ def pytest_configure(config):
 
 @pytest.fixture(scope="function")
 def fake_redis() -> Generator[fakeredis.FakeRedis, None, None]:
-    """Provide a fake Redis instance for testing."""
-    redis_instance = fakeredis.FakeRedis(decode_responses=True)
+    """Provide a fake Redis instance for testing.
+
+    RQ serialises job payloads as compressed (zlib) bytes and requires a
+    binary redis connection; decode_responses=True corrupts them.
+    """
+    redis_instance = fakeredis.FakeRedis(decode_responses=False)
     yield redis_instance
     redis_instance.flushall()
     redis_instance.close()
@@ -426,8 +430,8 @@ async def async_webhook_client(webhook_app) -> AsyncGenerator:
 
 @pytest.fixture(scope="function")
 def mock_telegram_client() -> Generator[Mock, None, None]:
-    """Mock TelegramClient for testing."""
-    with patch("shared.telegram_client.send_message", new_callable=AsyncMock) as mock:
+    """Mock TelegramClient.send_message for testing."""
+    with patch("shared.telegram_client.TelegramClient.send_message", new_callable=AsyncMock) as mock:
         mock.return_value = {
             "ok": True,
             "result": {

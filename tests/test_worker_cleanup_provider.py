@@ -47,6 +47,28 @@ def test_worker_tasks_source_has_no_kimi_or_openrouter_strings():
     assert "openrouter" not in source.lower(), "worker/tasks.py must not reference OpenRouter"
 
 
+def test_shared_package_does_not_export_openrouter():
+    """The unused OpenRouter client module was removed; the shared package
+    must no longer import or export it."""
+    import importlib
+    import inspect
+    import shared
+
+    importlib.reload(shared)
+
+    assert not hasattr(shared, "OpenRouterClient"), (
+        "shared must not export OpenRouterClient (module removed)"
+    )
+    assert not hasattr(shared, "OpenRouterError"), (
+        "shared must not export OpenRouterError (module removed)"
+    )
+
+    init_source = inspect.getsource(shared)
+    assert "openrouter" not in init_source.lower(), (
+        "shared/__init__.py must not reference OpenRouter"
+    )
+
+
 @pytest.mark.asyncio
 async def test_process_voice_note_uses_openai_cleanup_client(monkeypatch):
     """process_voice_note must instantiate OpenAICleanupClient for cleanup,

@@ -75,10 +75,11 @@ class WhisperLock:
         )
         
         if acquired:
+            acquired = True
             self.acquired = True
             logger.debug("Whisper lock acquired")
         
-        return acquired
+        return bool(acquired)
     
     def release(self):
         """Release the Whisper lock."""
