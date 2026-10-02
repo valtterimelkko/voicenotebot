@@ -4,7 +4,7 @@ import { LoadingSpinner } from '../components/LoadingSpinner'
 import { useSettingsStore } from '../store/settingsStore'
 
 const CLEANUP_MODELS = [
-  { value: 'gpt-5-nano', label: 'gpt-5-nano', description: 'OpenAI — fast and cost-effective' }
+  { value: 'google/gemma-4-26b-a4b-it', label: 'Gemma 4 26B A4B', description: 'via OpenRouter — highest fidelity in the B5 benchmark, fastest real cleanup' }
 ] as const
 
 export function SettingsPage() {
@@ -92,9 +92,9 @@ export function SettingsPage() {
             <dt className="text-slate-500">Cleanup model</dt>
             <dd data-testid="effective-cleanup-model" className="font-medium text-slate-800 text-right">
               {settings?.effective_cleanup_model ?? '—'}
-              {settings?.cleanup_reasoning_effort && (
+              {settings?.cleanup_provider && (
                 <span className="ml-1.5 text-xs font-normal text-slate-400">
-                  ({settings.cleanup_reasoning_effort} reasoning)
+                  via {settings.cleanup_provider}
                 </span>
               )}
             </dd>

@@ -26,8 +26,8 @@ describe('settings routes', () => {
     expect(res.status).toBe(200);
     // the cleanup service pins its model in code; the stored setting must
     // not be presented as the truth to the UI
-    expect(res.body.effective_cleanup_model).toBe('gpt-5-nano');
-    expect(res.body.cleanup_reasoning_effort).toBe('minimal');
+    expect(res.body.effective_cleanup_model).toBe('google/gemma-4-26b-a4b-it');
+    expect(res.body.cleanup_provider).toBe('openrouter');
     expect(res.body.stt_model).toBe('gpt-4o-mini-transcribe');
   });
 

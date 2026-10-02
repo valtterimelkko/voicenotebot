@@ -18,7 +18,7 @@ export interface Settings {
   stt_vocabulary: string
   /** What the backend code actually runs — may differ from the stored setting. */
   effective_cleanup_model: string
-  cleanup_reasoning_effort?: string
+  cleanup_provider?: string
   stt_model: string
 }
 

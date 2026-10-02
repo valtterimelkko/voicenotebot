@@ -33,11 +33,11 @@ const mockTranscript: Transcript = {
 }
 
 const mockSettings: Settings = {
-  default_cleanup_model: 'gpt-5-nano',
+  default_cleanup_model: 'google/gemma-4-26b-a4b-it',
   retention_days: 14,
   stt_vocabulary: '',
-  effective_cleanup_model: 'gpt-5-nano',
-  cleanup_reasoning_effort: 'minimal',
+  effective_cleanup_model: 'google/gemma-4-26b-a4b-it',
+  cleanup_provider: 'openrouter',
   stt_model: 'gpt-4o-mini-transcribe'
 }
 
@@ -235,20 +235,20 @@ describe('SearchPage', () => {
 describe('SettingsPage', () => {
   beforeEach(() => { vi.clearAllMocks() })
 
-  it('shows the gpt-5-nano cleanup model option after load, with no Kimi option', async () => {
+  it('shows the Gemma cleanup model option after load, with no Kimi option', async () => {
     vi.mocked(api.getSettings).mockResolvedValueOnce(mockSettings)
     render(<MemoryRouter><SettingsPage /></MemoryRouter>)
     await waitFor(() => {
-      expect(screen.getByLabelText(/gpt-5-nano/i)).toBeInTheDocument()
+      expect(screen.getByLabelText(/gemma 4 26b a4b/i)).toBeInTheDocument()
       expect(screen.queryByLabelText(/kimi/i)).not.toBeInTheDocument()
     })
   })
 
-  it('shows gpt-5-nano cleanup model as checked', async () => {
+  it('shows the active cleanup model as checked', async () => {
     vi.mocked(api.getSettings).mockResolvedValueOnce(mockSettings)
     render(<MemoryRouter><SettingsPage /></MemoryRouter>)
     await waitFor(() => {
-      const radio = screen.getByDisplayValue('gpt-5-nano') as HTMLInputElement
+      const radio = screen.getByDisplayValue('google/gemma-4-26b-a4b-it') as HTMLInputElement
       expect(radio.checked).toBe(true)
     })
   })
@@ -265,8 +265,8 @@ describe('SettingsPage', () => {
     vi.mocked(api.getSettings).mockResolvedValueOnce(mockSettings)
     render(<MemoryRouter><SettingsPage /></MemoryRouter>)
     await waitFor(() => {
-      expect(screen.getByTestId('effective-cleanup-model')).toHaveTextContent('gpt-5-nano')
-      expect(screen.getByTestId('effective-cleanup-model')).toHaveTextContent('minimal')
+      expect(screen.getByTestId('effective-cleanup-model')).toHaveTextContent('gemma-4-26b-a4b-it')
+      expect(screen.getByTestId('effective-cleanup-model')).toHaveTextContent('openrouter')
       expect(screen.getByTestId('stt-model')).toHaveTextContent('gpt-4o-mini-transcribe')
     })
   })
