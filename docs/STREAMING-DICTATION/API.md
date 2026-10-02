@@ -130,7 +130,7 @@ Finalize recording: transcribe audio, run cleanup, store transcript.
   "preview_text": "First 200 characters of cleaned text...",
   "raw_text": "Raw STT output...",
   "cleaned_text": "Cleaned up transcript...",
-  "cleanup_model": "gpt-5-nano",
+  "cleanup_model": "google/gemma-4-26b-a4b-it",
   "stt_model": "gpt-4o-mini-transcribe",
   "used_fallback": 0,
   "duration_ms": 15420,
@@ -166,7 +166,7 @@ List all transcripts, newest first.
       "preview_text": "...",
       "raw_text": "...",
       "cleaned_text": "...",
-      "cleanup_model": "gpt-5-nano",
+      "cleanup_model": "google/gemma-4-26b-a4b-it",
       "stt_model": "gpt-4o-mini-transcribe",
       "used_fallback": 0,
       "duration_ms": 15420,
@@ -244,7 +244,7 @@ Get current user settings.
 
 ```json
 {
-  "default_cleanup_model": "gpt-5-nano",
+  "default_cleanup_model": "google/gemma-4-26b-a4b-it",
   "retention_days": 14
 }
 ```
@@ -259,18 +259,18 @@ Update user settings. Supports partial updates.
 
 ```json
 {
-  "default_cleanup_model": "gpt-5-nano",
+  "default_cleanup_model": "google/gemma-4-26b-a4b-it",
   "retention_days": 30
 }
 ```
 
-Both fields are optional. `default_cleanup_model` must be `"gpt-5-nano"` (the only supported cleanup model). `retention_days` must be a number.
+Both fields are optional. `default_cleanup_model` must be `"google/gemma-4-26b-a4b-it"` (the only supported cleanup model). `retention_days` must be a number.
 
 **Response (200):** Updated settings object:
 
 ```json
 {
-  "default_cleanup_model": "gpt-5-nano",
+  "default_cleanup_model": "google/gemma-4-26b-a4b-it",
   "retention_days": 30
 }
 ```
@@ -317,7 +317,7 @@ the process is listening.
 | `preview_text` | string | First 200 characters of `cleaned_text` |
 | `raw_text` | string | Direct STT output |
 | `cleaned_text` | string | LLM-processed output |
-| `cleanup_model` | string | `"gpt-5-nano"` |
+| `cleanup_model` | string | `"google/gemma-4-26b-a4b-it"` |
 | `stt_model` | string | `"gpt-4o-mini-transcribe"` |
 | `used_fallback` | number | `1` if batch STT fallback was used, `0` otherwise |
 | `duration_ms` | number \| null | Recording duration in milliseconds |
@@ -334,21 +334,30 @@ the process is listening.
 | `SESSION_SECRET` | Yes | `dev-secret-change-in-prod` | Secret for session cookie signing |
 | `PASSWORD_HASH` | Yes | (empty) | bcrypt hash of the login password |
 | `OPENAI_API_KEY` | Yes | (empty) | OpenAI API key for STT and cleanup |
-| `DEFAULT_CLEANUP_MODEL` | No | `gpt-5-nano` | Default LLM for cleanup: `gpt-5-nano` (only supported value) |
+| `DEFAULT_CLEANUP_MODEL` | No | `google/gemma-4-26b-a4b-it` | Informational — the cleanup service pins its model in code |
+| `OPENROUTER_API_KEY` | **Yes** | — | Required for cleanup (OpenRouter route) |
 | `RETENTION_DAYS` | No | `14` | Days before transcripts are auto-deleted |
 | `DATABASE_PATH` | No | `data/transcripts.db` | SQLite database file path |
 
 ---
 
-## OpenAI Cleanup Contract
+## Cleanup Contract
 
-Transcript cleanup calls OpenAI's chat completions API directly via the
-official `openai` SDK, using `OPENAI_API_KEY` (the same key used for STT).
+Transcript cleanup calls the OpenRouter chat completions endpoint
+(`https://openrouter.ai/api/v1/chat/completions`) directly, using
+`OPENROUTER_API_KEY` (STT keeps `OPENAI_API_KEY`).
 
-- **Model**: `gpt-5-nano`
-- **Temperature**: 0.3
-- **Max tokens**: 60000
-- **Response**: `response.choices[0].message.content`
+- **Model**: `google/gemma-4-26b-a4b-it` (non-reasoning; thinking off)
+- **Temperature**: 0.3 (matches Benchmark 5 conditions)
+- **Retry**: once on transient 429/5xx; then the route logs `cleanup_failed`
+  and keeps the raw transcript
+- **Response**: `choices[0].message.content`, post-processed by the British
+  -ise spelling pass
+
+The cleanup model, its provider and the STT model are exposed by
+`GET /api/settings` as `effective_cleanup_model`, `cleanup_provider` and
+`stt_model`, sourced from `src/services/models.ts` — the single source of
+truth for what actually runs.
 
 > Kimi cleanup (`api.kimi.com`) was removed after the Kimi API key was
 > deleted/leaked and the Kimi subscription expired. `KIMI_API_KEY` is no

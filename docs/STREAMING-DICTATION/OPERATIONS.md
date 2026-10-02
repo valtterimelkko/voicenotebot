@@ -134,7 +134,8 @@ All variables are read from `/root/voicenotebot/streaming-dictation/backend/.env
 | `SESSION_SECRET` | Yes | `dev-secret-change-in-prod` | Session signing secret |
 | `PASSWORD_HASH` | Yes | (empty) | bcrypt hash for login |
 | `OPENAI_API_KEY` | Yes | (empty) | OpenAI API key (STT and cleanup) |
-| `DEFAULT_CLEANUP_MODEL` | No | `gpt-5-nano` | `gpt-5-nano` (only supported value) |
+| `DEFAULT_CLEANUP_MODEL` | No | `google/gemma-4-26b-a4b-it` | informational; the cleanup service pins its model in code and `/api/settings` reports the truth |
+| `OPENROUTER_API_KEY` | **Yes (for cleanup)** | — | OpenRouter key; cleanup runs on `google/gemma-4-26b-a4b-it` |
 | `RETENTION_DAYS` | No | `14` | Auto-delete transcripts after N days |
 | `DATABASE_PATH` | No | `data/transcripts.db` | SQLite file path |
 

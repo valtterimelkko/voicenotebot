@@ -27,7 +27,7 @@ Implemented today:
 - single-user password login with session cookies
 - recording lifecycle: `start` → `stream` → `finish`
 - OpenAI STT with fallback handling
-- cleanup via **OpenAI `gpt-5-nano`**
+- cleanup via **Google `gemma-4-26b-a4b-it` (OpenRouter)**
 - transcript history, search, copy, and settings
 - cross-device access to recent transcript history
 - retention-based transcript cleanup

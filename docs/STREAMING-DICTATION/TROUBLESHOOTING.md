@@ -73,8 +73,13 @@ journalctl -u streaming-dictation | grep -i cleanup
 - if cleanup fails, the app keeps the raw transcript rather than failing the whole recording
 
 > Kimi cleanup (`api.kimi.com`) was removed after the Kimi API key was
-> deleted/leaked and the Kimi subscription expired. `gpt-5-nano` via
-> `OPENAI_API_KEY` is now the only cleanup path.
+> deleted/leaked and the Kimi subscription expired. Cleanup then ran on
+> OpenAI `gpt-5-nano`; since 2026-10-02 it runs on Google
+> `gemma-4-26b-a4b-it` via OpenRouter (`OPENROUTER_API_KEY`), chosen by the
+> measured Benchmark 5 — see
+> `/root/agent-benchmarks/benchmarks/05-cleanup-quality/`. A cleanup failure
+> still leaves the raw transcript in place; check journalctl for
+> `cleanup_failed` warnings.
 
 ---
 

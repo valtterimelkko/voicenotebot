@@ -9,7 +9,7 @@
 | Frontend | React + Vite + TypeScript + Tailwind |
 | PWA | vite-plugin-pwa |
 | STT | OpenAI `gpt-4o-mini-transcribe` |
-| Cleanup | OpenAI (`gpt-5-nano`) |
+| Cleanup | OpenAI `gpt/gemma` — Google `gemma-4-26b-a4b-it` via OpenRouter (B5 benchmark winner; `OPENROUTER_API_KEY`) |
 | Test | Vitest + supertest |
 | Deployment | systemd behind Caddy |
 
@@ -65,7 +65,7 @@ Browser Microphone
 │  │     │                                │  │
 │  │     ▼                                │  │
 │  │  LLM Cleanup                         │  │
-│  │     └─ OpenAI (gpt-5-nano)           │  │
+│  │     └─ OpenRouter (gemma-4-26b-a4b-it) │  │
 │  │     │                                │  │
 │  │     ▼                                │  │
 │  │  SQLite (transcripts table)          │  │
@@ -147,7 +147,7 @@ If proxy configuration is wrong, authentication may appear broken even when the 
 | `preview_text` | TEXT | First 200 chars of cleaned text |
 | `raw_text` | TEXT | Raw STT output |
 | `cleaned_text` | TEXT | LLM-cleaned output |
-| `cleanup_model` | TEXT | `gpt-5-nano` |
+| `cleanup_model` | TEXT | `google/gemma-4-26b-a4b-it` |
 | `stt_model` | TEXT | `gpt-4o-mini-transcribe` |
 | `used_fallback` | INTEGER | 1 if batch fallback was used |
 | `duration_ms` | INTEGER | Recording duration in milliseconds |
@@ -160,7 +160,7 @@ Single-row table (`id = 1`):
 | Column | Type | Default |
 |--------|------|---------|
 | `id` | INTEGER PK | 1 |
-| `default_cleanup_model` | TEXT | `gpt-5-nano` |
+| `default_cleanup_model` | TEXT | `google/gemma-4-26b-a4b-it` |
 | `retention_days` | INTEGER | 14 |
 
 ### `sessions`
@@ -182,7 +182,8 @@ Used by express-session store:
 
 ## Cleanup and retention
 
-- Cleanup uses OpenAI `gpt-5-nano` directly via `OPENAI_API_KEY` (Kimi cleanup was removed after the Kimi API key was deleted/leaked).
+- Cleanup uses Google `gemma-4-26b-a4b-it` via OpenRouter (`OPENROUTER_API_KEY`), chosen by the measured Benchmark 5 (`/root/agent-benchmarks/benchmarks/05-cleanup-quality/`). Previously OpenAI `gpt-5-nano` (retired as a served snapshot 2026-12-11); before that Kimi (removed after the Kimi API key was deleted/leaked).
+- **Model lifecycle (2026-10-02 pivot).** OpenAI's deprecation wave forces deliberate model choices: `gpt-4o-mini-transcribe` (STT) is removed **2027-02-26** (replacements: `gpt-transcribe` for files/batch, `gpt-live-transcribe` for streaming); `tts-1`-era TTS dies **2027-01-06**; the `gpt-5-nano-2025-08-07` snapshot died **2026-12-11**. Text `gpt-4o-mini` has no announced date. Cleanup was migrated first because it was benchmark-measured and provider-insulated; the STT migration is a separate workstream evaluating Groq whisper-turbo, Grok Voice Transcribe, `gpt-transcribe` and local Parakeet on real audio (Finnish included) before the constant changes.
 - Retention cleanup runs on an interval and deletes transcripts past expiry.
 - Retention affects stored transcript history, not active in-memory recordings.
 

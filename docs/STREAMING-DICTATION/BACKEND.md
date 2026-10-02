@@ -70,6 +70,11 @@ If the process restarts during a recording, that in-progress recording is lost.
 
 Current model:
 - OpenAI `gpt-4o-mini-transcribe` is the main STT model
+- ⚠️ OpenAI retires it (with whisper-1 and gpt-4o-transcribe) on **2027-02-26**;
+  the named replacements are `gpt-transcribe` (files/batch) and
+  `gpt-live-transcribe` (streaming). Migration is a separate workstream —
+  candidates incl. Groq whisper-turbo and local Parakeet are being evaluated,
+  see session `pi:01a0fd50` in the Agent OS worklog.
 - the backend attempts a primary path first
 - if necessary, it retries via a fallback path
 - longer recordings may benefit from speculative transcription started before `finish`
@@ -77,7 +82,13 @@ Current model:
 ## Cleanup Behaviour
 
 Current supported cleanup model:
-- OpenAI `gpt-5-nano` (via `OPENAI_API_KEY`; Kimi cleanup was removed after the Kimi API key was deleted/leaked)
+- Google `gemma-4-26b-a4b-it` via **OpenRouter** (`OPENROUTER_API_KEY`), temperature 0.3
+- chosen from the measured Benchmark 5 (97.4/100, zero ungrounded content words, 2.37 s p50)
+- the served model identity is pinned in `src/services/models.ts` and reported
+  truthfully by `GET /api/settings` (`effective_cleanup_model`, `cleanup_provider`)
+- history: Kimi (removed after the Kimi key was deleted/leaked) → OpenAI
+  `gpt-5-nano` (default reasoning dominated latency; its served snapshot is
+  withdrawn 2026-12-11) → Gemma via OpenRouter
 
 If cleanup fails, the backend keeps the raw transcript rather than failing the entire recording flow.
 
