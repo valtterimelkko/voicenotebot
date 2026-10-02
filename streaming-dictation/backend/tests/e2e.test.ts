@@ -8,13 +8,13 @@ import request from 'supertest';
 vi.mock('../src/services/stt', () => ({
   transcribeWithFallback: vi.fn().mockResolvedValue({
     text: 'Hello world this is a test transcription about important things',
-    model: 'gpt-4o-mini-transcribe',
+    model: 'openai/whisper-large-v3-turbo',
     usedFallback: false,
   }),
   startSpeculativeTranscription: vi.fn().mockReturnValue({
     promise: Promise.resolve({
       text: 'Hello world speculative transcription',
-      model: 'gpt-4o-mini-transcribe',
+      model: 'openai/whisper-large-v3-turbo',
       usedFallback: false,
     }),
     chunkCount: 3,
@@ -46,7 +46,7 @@ describe('E2E: full login → recording → transcript → search → copy flow'
     resetForTesting();
     mockedTranscribe.mockResolvedValue({
       text: 'Hello world this is a test transcription about important things',
-      model: 'gpt-4o-mini-transcribe',
+      model: 'openai/whisper-large-v3-turbo',
       usedFallback: false,
     });
     mockedCleanup.mockResolvedValue({
@@ -85,7 +85,7 @@ describe('E2E: full login → recording → transcript → search → copy flow'
     expect(finishRes.body.id).toBe(recordingId);
     expect(finishRes.body.raw_text).toBe('Hello world this is a test transcription about important things');
     expect(finishRes.body.cleaned_text).toBe('Hello world, this is a cleaned transcription about important things.');
-    expect(finishRes.body.stt_model).toBe('gpt-4o-mini-transcribe');
+    expect(finishRes.body.stt_model).toBe('openai/whisper-large-v3-turbo');
     expect(finishRes.body.cleanup_model).toBe('gpt-5-nano');
     expect(finishRes.body.status).toBe('completed');
 
@@ -211,7 +211,7 @@ describe('E2E: full login → recording → transcript → search → copy flow'
   it('handles cleanup failure gracefully', async () => {
     mockedTranscribe.mockResolvedValue({
       text: 'Some raw text',
-      model: 'gpt-4o-mini-transcribe',
+      model: 'openai/whisper-large-v3-turbo',
       usedFallback: false,
     });
     mockedCleanup.mockRejectedValueOnce(new Error('Cleanup failed'));

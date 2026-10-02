@@ -16,7 +16,7 @@ Build a new single-user, phone-first, PWA-based streaming dictation system in th
 
 The new system should:
 
-- use **OpenAI `gpt-4o-mini-transcribe`** as the primary STT path
+- use **OpenAI `whisper-large-v3-turbo (via OpenRouter; gpt-transcribe as last-resort fallback)`** as the primary STT path
 - support **streaming capture** from a mobile-friendly PWA
 - produce a **single final transcript** per recording, not live partial transcript in v1
 - support **switchable cleanup models**:
@@ -82,7 +82,7 @@ These are fixed inputs for implementation unless the user changes them later.
 - **Sync**: mobile and desktop use the same transcript history
 - **Cleanup selection UX**: global default in settings
 - **Cleanup models**: Kimi and one cost-effective OpenAI alternative; current preferred alternative = `gpt-5-nano`
-- **STT primary**: OpenAI `gpt-4o-mini-transcribe`
+- **STT primary**: OpenAI `whisper-large-v3-turbo (via OpenRouter; gpt-transcribe as last-resort fallback)`
 - **STT fallback**: OpenAI batch rescue path using captured audio blob
 - **Auth**: simple robust **session-based login**
 - **Retention**: keep only recent history, default 14 days
@@ -196,7 +196,7 @@ Phone / Desktop Browser (same responsive PWA)
 Backend
   -> Session auth
   -> Streaming audio ingest
-  -> OpenAI STT primary (`gpt-4o-mini-transcribe`)
+  -> OpenAI STT primary (`whisper-large-v3-turbo (via OpenRouter; gpt-transcribe as last-resort fallback)`)
   -> Fallback batch STT rescue on stream failure
   -> Cleanup step:
        - Kimi (exact legacy-compatible contract semantics)
@@ -439,7 +439,7 @@ Transcript
 - raw_text                # optional but recommended for debugging / comparison
 - cleaned_text
 - cleanup_model           # kimi | gpt-5-nano
-- stt_model               # gpt-4o-mini-transcribe
+- stt_model               # whisper-large-v3-turbo (via OpenRouter; gpt-transcribe as last-resort fallback)
 - used_fallback           # boolean
 - duration_ms             # optional
 - status                  # completed | failed

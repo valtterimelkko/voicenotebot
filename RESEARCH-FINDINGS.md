@@ -248,7 +248,7 @@ volumes:
 | **Remove cleanup entirely** | Instant | Free | May have filler words |
 | **Local small LLM (llama.cpp)** | Fast | Free (hardware) | Good enough |
 
-**Recommendation**: Try removing the Kimi step entirely for a week. OpenAI's `gpt-4o-mini-transcribe` already does a good job with filler words. If you need cleanup, switch to GPT-4o mini via OpenRouter for faster response.
+**Recommendation**: Try removing the Kimi step entirely for a week. OpenAI's `whisper-large-v3-turbo (via OpenRouter; gpt-transcribe as last-resort fallback)` already does a good job with filler words. If you need cleanup, switch to GPT-4o mini via OpenRouter for faster response.
 
 ---
 

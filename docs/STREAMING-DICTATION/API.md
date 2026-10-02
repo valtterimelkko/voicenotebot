@@ -131,7 +131,7 @@ Finalize recording: transcribe audio, run cleanup, store transcript.
   "raw_text": "Raw STT output...",
   "cleaned_text": "Cleaned up transcript...",
   "cleanup_model": "google/gemma-4-26b-a4b-it",
-  "stt_model": "gpt-4o-mini-transcribe",
+  "stt_model": "whisper-large-v3-turbo (via OpenRouter; gpt-transcribe as last-resort fallback)",
   "used_fallback": 0,
   "duration_ms": 15420,
   "status": "completed"
@@ -167,7 +167,7 @@ List all transcripts, newest first.
       "raw_text": "...",
       "cleaned_text": "...",
       "cleanup_model": "google/gemma-4-26b-a4b-it",
-      "stt_model": "gpt-4o-mini-transcribe",
+      "stt_model": "whisper-large-v3-turbo (via OpenRouter; gpt-transcribe as last-resort fallback)",
       "used_fallback": 0,
       "duration_ms": 15420,
       "status": "completed"
@@ -318,7 +318,7 @@ the process is listening.
 | `raw_text` | string | Direct STT output |
 | `cleaned_text` | string | LLM-processed output |
 | `cleanup_model` | string | `"google/gemma-4-26b-a4b-it"` |
-| `stt_model` | string | `"gpt-4o-mini-transcribe"` |
+| `stt_model` | string | `"whisper-large-v3-turbo (via OpenRouter; gpt-transcribe as last-resort fallback)"` |
 | `used_fallback` | number | `1` if batch STT fallback was used, `0` otherwise |
 | `duration_ms` | number \| null | Recording duration in milliseconds |
 | `status` | string | Always `"completed"` |

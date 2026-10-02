@@ -28,7 +28,7 @@ describe('settings routes', () => {
     // not be presented as the truth to the UI
     expect(res.body.effective_cleanup_model).toBe('google/gemma-4-26b-a4b-it');
     expect(res.body.cleanup_provider).toBe('openrouter');
-    expect(res.body.stt_model).toBe('gpt-4o-mini-transcribe');
+    expect(res.body.stt_model).toBe('openai/whisper-large-v3-turbo');
   });
 
   it('PUT / updates cleanup model', async () => {

@@ -69,7 +69,7 @@ If the process restarts during a recording, that in-progress recording is lost.
 ## STT Behaviour
 
 Current model:
-- OpenAI `gpt-4o-mini-transcribe` is the main STT model
+- OpenAI `whisper-large-v3-turbo (via OpenRouter; gpt-transcribe as last-resort fallback)` is the main STT model
 - ⚠️ OpenAI retires it (with whisper-1 and gpt-4o-transcribe) on **2027-02-26**;
   the named replacements are `gpt-transcribe` (files/batch) and
   `gpt-live-transcribe` (streaming). Migration is a separate workstream —

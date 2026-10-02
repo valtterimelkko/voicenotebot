@@ -31,8 +31,9 @@ class OpenAITranscriptionError(Exception):
 class OpenAITranscriptionClient:
     """OpenAI API client for audio transcription.
 
-    Uses OpenAI's audio transcriptions endpoint with gpt-4o-mini-transcribe
-    or gpt-4o-transcribe models for fast, accurate speech-to-text.
+    Uses OpenAI's audio transcriptions endpoint with gpt-transcribe for
+    fast, accurate speech-to-text. (The gpt-4o transcription family this
+    client used before 2026-10-02 is removed from the API on 2027-02-26.)
 
     Attributes:
         api_key: OpenAI API key from OPENAI_API_KEY env var.
@@ -41,7 +42,7 @@ class OpenAITranscriptionClient:
         client: httpx client for making requests.
     """
 
-    DEFAULT_MODEL = "gpt-4o-mini-transcribe"
+    DEFAULT_MODEL = "gpt-transcribe"
     BASE_URL = "https://api.openai.com/v1"
 
     def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
@@ -49,7 +50,7 @@ class OpenAITranscriptionClient:
 
         Args:
             api_key: OpenAI API key. If None, reads from OPENAI_API_KEY env var.
-            model: Transcription model. Defaults to gpt-4o-mini-transcribe.
+            model: Transcription model. Defaults to gpt-transcribe.
 
         Raises:
             OpenAITranscriptionError: If no API key is provided or found.
