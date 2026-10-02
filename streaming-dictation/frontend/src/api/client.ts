@@ -16,6 +16,10 @@ export interface Settings {
   default_cleanup_model: string
   retention_days: number
   stt_vocabulary: string
+  /** What the backend code actually runs — may differ from the stored setting. */
+  effective_cleanup_model: string
+  cleanup_reasoning_effort?: string
+  stt_model: string
 }
 
 async function apiFetch(path: string, options?: RequestInit): Promise<unknown> {

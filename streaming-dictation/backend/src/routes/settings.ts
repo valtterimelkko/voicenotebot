@@ -1,5 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { DB } from '../db';
+// deliberately NOT imported from the service modules: those construct API
+// clients at import time, which breaks client-free test contexts
+import { CLEANUP_MODEL, CLEANUP_REASONING_EFFORT, STT_MODEL } from '../services/models';
 
 interface SettingsRow {
   default_cleanup_model: string;
@@ -14,7 +17,15 @@ export function settingsRouter(db: DB): Router {
     const row = db.prepare(
       'SELECT default_cleanup_model, retention_days, stt_vocabulary FROM user_settings WHERE id = 1'
     ).get() as SettingsRow | undefined;
-    res.json(row ?? { default_cleanup_model: 'gpt-5-nano', retention_days: 60, stt_vocabulary: '' });
+    // effective_* fields report what the code actually runs (single source of
+    // truth: the service constants), not what the settings row claims — the
+    // UI must not silently drift from reality when a constant changes.
+    res.json({
+      ...(row ?? { default_cleanup_model: 'gpt-5-nano', retention_days: 60, stt_vocabulary: '' }),
+      effective_cleanup_model: CLEANUP_MODEL,
+      cleanup_reasoning_effort: CLEANUP_REASONING_EFFORT,
+      stt_model: STT_MODEL,
+    });
   });
 
   router.put('/', (req: Request, res: Response) => {

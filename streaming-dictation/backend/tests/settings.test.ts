@@ -21,6 +21,16 @@ describe('settings routes', () => {
     expect(res.body.stt_vocabulary).toBe('');
   });
 
+  it('GET / reports what actually runs, from code constants not the DB', async () => {
+    const res = await request(app).get('/api/settings');
+    expect(res.status).toBe(200);
+    // the cleanup service pins its model in code; the stored setting must
+    // not be presented as the truth to the UI
+    expect(res.body.effective_cleanup_model).toBe('gpt-5-nano');
+    expect(res.body.cleanup_reasoning_effort).toBe('minimal');
+    expect(res.body.stt_model).toBe('gpt-4o-mini-transcribe');
+  });
+
   it('PUT / updates cleanup model', async () => {
     const res = await request(app)
       .put('/api/settings')

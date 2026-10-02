@@ -35,7 +35,10 @@ const mockTranscript: Transcript = {
 const mockSettings: Settings = {
   default_cleanup_model: 'gpt-5-nano',
   retention_days: 14,
-  stt_vocabulary: ''
+  stt_vocabulary: '',
+  effective_cleanup_model: 'gpt-5-nano',
+  cleanup_reasoning_effort: 'minimal',
+  stt_model: 'gpt-4o-mini-transcribe'
 }
 
 describe('HistoryPage', () => {
@@ -255,6 +258,16 @@ describe('SettingsPage', () => {
     render(<MemoryRouter><SettingsPage /></MemoryRouter>)
     await waitFor(() => {
       expect(screen.getByText(/14 days/)).toBeInTheDocument()
+    })
+  })
+
+  it('shows what actually runs: cleanup model with reasoning effort and the STT model', async () => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(mockSettings)
+    render(<MemoryRouter><SettingsPage /></MemoryRouter>)
+    await waitFor(() => {
+      expect(screen.getByTestId('effective-cleanup-model')).toHaveTextContent('gpt-5-nano')
+      expect(screen.getByTestId('effective-cleanup-model')).toHaveTextContent('minimal')
+      expect(screen.getByTestId('stt-model')).toHaveTextContent('gpt-4o-mini-transcribe')
     })
   })
 })

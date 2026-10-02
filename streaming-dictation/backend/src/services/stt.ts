@@ -1,6 +1,8 @@
 import { getSharedOpenAIClient } from './connectionPool';
 
-const STT_MODEL = 'gpt-4o-mini-transcribe';
+import { STT_MODEL } from './models';
+
+export { STT_MODEL };
 
 export interface STTResult {
   text: string;

@@ -79,6 +79,43 @@ export function SettingsPage() {
         </div>
       )}
 
+      {/* What actually runs — sourced from backend code constants, not settings */}
+      <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-700">Currently running</h3>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Reported by the backend from its own configuration
+          </p>
+        </div>
+        <dl className="space-y-2 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <dt className="text-slate-500">Cleanup model</dt>
+            <dd data-testid="effective-cleanup-model" className="font-medium text-slate-800 text-right">
+              {settings?.effective_cleanup_model ?? '—'}
+              {settings?.cleanup_reasoning_effort && (
+                <span className="ml-1.5 text-xs font-normal text-slate-400">
+                  ({settings.cleanup_reasoning_effort} reasoning)
+                </span>
+              )}
+            </dd>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <dt className="text-slate-500">Transcription model</dt>
+            <dd data-testid="stt-model" className="font-medium text-slate-800 text-right">
+              {settings?.stt_model ?? '—'}
+              {settings?.stt_model === 'gpt-4o-mini-transcribe' && (
+                <span
+                  className="ml-1.5 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-xs font-normal text-amber-700"
+                  title="OpenAI removes this model from the API on 2027-02-26; migration to gpt-transcribe is planned"
+                >
+                  retires 2027-02-26
+                </span>
+              )}
+            </dd>
+          </div>
+        </dl>
+      </section>
+
       {/* Cleanup model selector */}
       <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
         <div>
