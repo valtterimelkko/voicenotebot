@@ -52,6 +52,20 @@ describe('cleanupTranscript with gpt-5-nano', () => {
     expect(mockChatCreate).toHaveBeenCalledTimes(1);
   });
 
+  it('requests the minimal reasoning effort for latency', async () => {
+    mockChatCreate.mockResolvedValue({
+      choices: [{ message: { content: 'c' } }],
+    });
+
+    await cleanupTranscript('reasoning test', 'gpt-5-nano');
+
+    const callArgs = mockChatCreate.mock.calls[0][0];
+    // gpt-5-nano is a reasoning model; its native floor is 'minimal'
+    // (there is no off). Cleanup is latency-critical, so the request must
+    // pin reasoning effort to the floor instead of the medium default.
+    expect(callArgs.reasoning_effort).toBe('minimal');
+  });
+
   it('sends correct model and messages to OpenAI', async () => {
     mockChatCreate.mockResolvedValue({
       choices: [{ message: { content: 'c' } }],

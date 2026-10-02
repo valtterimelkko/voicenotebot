@@ -51,8 +51,19 @@ async function cleanupWithOpenAI(transcriptText: string, vocabulary?: string): P
   // gpt-5-nano only supports the default temperature (1) — passing any
   // other value (e.g. 0.3) is rejected with a 400 "Unsupported value"
   // error, so the parameter is intentionally omitted here.
+  //
+  // reasoning_effort is pinned to 'minimal', the native floor for gpt-5
+  // models (there is no off on this route). The default 'medium' reasoning
+  // pass was measured at ~4-5s per cleanup call on 2026-10-02 and dominated
+  // finish latency; cleanup is a light-touch edit that needs no deep
+  // reasoning, so the floor is the right operating point.
+  //
+  // The pinned openai-node 4.x type union predates 'minimal' although the
+  // API accepts it for gpt-5 models (verified live 2026-10-02), hence the
+  // narrow cast instead of a dependency major-upgrade.
   const response = await client.chat.completions.create({
     model: OPENAI_CLEANUP_MODEL,
+    reasoning_effort: 'minimal' as 'low',
     messages: [
       { role: 'system', content: buildSystemPrompt(vocabulary) },
       { role: 'user', content: `Clean up this transcript:\n\n${transcriptText}` },
