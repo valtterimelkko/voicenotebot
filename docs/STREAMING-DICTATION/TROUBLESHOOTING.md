@@ -31,6 +31,27 @@ grep -E '(PASSWORD_HASH|OPENAI_API_KEY|SESSION_SECRET)' \
 
 ---
 
+## Transcripts Come Back in the Wrong Language
+
+**Symptom**: An English dictation is returned as fluent Spanish, Icelandic or
+another language (sometimes code-switched with English fragments), with a
+normal `stt_model` and `status: completed`.
+
+**Root cause**: Whisper-family models auto-detect the language per clip when
+no `language` is pinned. Detection is unreliable on short or ambiguous audio
+(a 2-second clip can land on almost any language), and once the decoder
+commits to a wrong language token it produces output in that language —
+effectively a translation of what was said. Observed 2026-10-03 with
+`openai/whisper-large-v3-turbo` via OpenRouter/DeepInfra.
+
+**Fix**: the `stt_language` setting (Settings → Dictation language) pins the
+language for every STT tier; it defaults to `en`. Only choose `auto` if you
+genuinely dictate in multiple languages — short clips may then come back in
+the wrong language again. The setting is sent as the `language` field on the
+OpenRouter request and as `language` on the local Parakeet and OpenAI tiers.
+
+---
+
 ## OpenAI STT Failures
 
 **Symptom**: Recordings finish with empty `raw_text` and `cleaned_text`, or transcripts come back blank.

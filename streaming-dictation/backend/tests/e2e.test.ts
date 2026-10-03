@@ -90,6 +90,8 @@ describe('E2E: full login → recording → transcript → search → copy flow'
     expect(finishRes.body.status).toBe('completed');
 
     expect(mockedTranscribe).toHaveBeenCalledOnce();
+    // default settings pin English for STT (wrong-language-transcript fix)
+    expect(mockedTranscribe.mock.calls[0][2]).toBe('en');
     expect(mockedCleanup).toHaveBeenCalledOnce();
 
     const listRes = await agent.get('/api/transcripts');
@@ -123,6 +125,23 @@ describe('E2E: full login → recording → transcript → search → copy flow'
     expect(getSettingsRes.status).toBe(200);
     expect(getSettingsRes.body.default_cleanup_model).toBe('gpt-5-nano');
     expect(getSettingsRes.body.retention_days).toBe(60);
+  });
+
+  it('passes the configured stt_language to the STT tier on finish', async () => {
+    await agent.post('/auth/login').send({ password: 'testpassword' });
+    const putRes = await agent.put('/api/settings').send({ stt_language: 'fi' });
+    expect(putRes.status).toBe(200);
+
+    const startRes = await agent.post('/api/recordings/start');
+    const recordingId = startRes.body.id;
+    await agent
+      .post(`/api/recordings/${recordingId}/stream`)
+      .set('Content-Type', 'application/octet-stream')
+      .send(Buffer.from('fake-audio'));
+    const finishRes = await agent.post(`/api/recordings/${recordingId}/finish`);
+    expect(finishRes.status).toBe(200);
+    expect(mockedTranscribe).toHaveBeenCalledOnce();
+    expect(mockedTranscribe.mock.calls[0][2]).toBe('fi');
   });
 
   it('warmup endpoint returns ok when authenticated', async () => {

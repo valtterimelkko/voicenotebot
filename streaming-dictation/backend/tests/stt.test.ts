@@ -174,6 +174,83 @@ describe('transcribeWithFallback tiers', () => {
   });
 });
 
+describe('language pinning (wrong-language transcript fix)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    configState.openrouterApiKey = 'test-or-key';
+    setEnv('OPENROUTER_API_KEY', 'test-or-key');
+    setEnv('OPENROUTER_STT_URL', undefined);
+    setEnv('LOCAL_ASR_URL', undefined);
+  });
+
+  it('pins the configured language in the OpenRouter request body', async () => {
+    const fake = await fakeSttServer(200, { text: 'pinned text' });
+    setEnv('OPENROUTER_STT_URL', fake.url);
+    try {
+      await transcribeWithFallback([Buffer.from('audio')], undefined, 'en');
+      expect(fake.requests).toHaveLength(1);
+      const payload = JSON.parse(fake.requests[0].body.toString('utf8'));
+      expect(payload.language).toBe('en');
+    } finally {
+      fake.close();
+    }
+  });
+
+  it('omits the language field when language is auto', async () => {
+    const fake = await fakeSttServer(200, { text: 'auto text' });
+    setEnv('OPENROUTER_STT_URL', fake.url);
+    try {
+      await transcribeWithFallback([Buffer.from('audio')], undefined, 'auto');
+      const payload = JSON.parse(fake.requests[0].body.toString('utf8'));
+      expect('language' in payload).toBe(false);
+    } finally {
+      fake.close();
+    }
+  });
+
+  it('passes the configured language to the local Parakeet fallback', async () => {
+    const orFail = await fakeSttServer(500, { error: 'down' });
+    const local = await fakeSttServer(200, { text: 'local text' });
+    setEnv('OPENROUTER_STT_URL', orFail.url);
+    setEnv('LOCAL_ASR_URL', local.url);
+    try {
+      await transcribeWithFallback([Buffer.from('audio')], undefined, 'fi');
+      const body = local.requests[0].body.toString('utf8');
+      expect(body).toContain('name="language"');
+      expect(body).toMatch(/name="language"\r\n\r\nfi\r\n/);
+    } finally {
+      orFail.close(); local.close();
+    }
+  });
+
+  it('passes the language to the OpenAI last-resort tier', async () => {
+    const orFail = await fakeSttServer(500, { error: 'down' });
+    setEnv('OPENROUTER_STT_URL', orFail.url);
+    setEnv('LOCAL_ASR_URL', 'http://127.0.0.1:9/asr'); // nothing listens
+    mockTranscriptionCreate.mockResolvedValue('openai last resort text');
+    try {
+      await transcribeWithFallback([Buffer.from('audio')], undefined, 'en');
+      expect(mockTranscriptionCreate).toHaveBeenCalledTimes(1);
+      expect(mockTranscriptionCreate.mock.calls[0][0].language).toBe('en');
+    } finally {
+      orFail.close();
+    }
+  });
+
+  it('startSpeculativeTranscription carries the language pin', async () => {
+    const fake = await fakeSttServer(200, { text: 'speculative text' });
+    setEnv('OPENROUTER_STT_URL', fake.url);
+    try {
+      const spec = startSpeculativeTranscription([Buffer.from('a')], undefined, 'en');
+      await spec.promise;
+      const payload = JSON.parse(fake.requests[0].body.toString('utf8'));
+      expect(payload.language).toBe('en');
+    } finally {
+      fake.close();
+    }
+  });
+});
+
 describe('speculative transcription contract (unchanged)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

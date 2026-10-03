@@ -1,4 +1,4 @@
-import { render, screen, waitFor, act } from '@testing-library/react'
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { HistoryPage } from '../pages/HistoryPage'
@@ -36,6 +36,7 @@ const mockSettings: Settings = {
   default_cleanup_model: 'google/gemma-4-26b-a4b-it',
   retention_days: 14,
   stt_vocabulary: '',
+  stt_language: 'en',
   effective_cleanup_model: 'google/gemma-4-26b-a4b-it',
   cleanup_provider: 'openrouter',
   stt_model: 'gpt-4o-mini-transcribe'
@@ -268,6 +269,27 @@ describe('SettingsPage', () => {
       expect(screen.getByTestId('effective-cleanup-model')).toHaveTextContent('gemma-4-26b-a4b-it')
       expect(screen.getByTestId('effective-cleanup-model')).toHaveTextContent('openrouter')
       expect(screen.getByTestId('stt-model')).toHaveTextContent('gpt-4o-mini-transcribe')
+    })
+  })
+
+  it('shows the dictation language selector with the configured value', async () => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(mockSettings)
+    render(<MemoryRouter><SettingsPage /></MemoryRouter>)
+    await waitFor(() => {
+      const select = screen.getByTestId('stt-language-select') as HTMLSelectElement
+      expect(select.value).toBe('en')
+    })
+    expect(screen.getByText('Dictation language')).toBeInTheDocument()
+  })
+
+  it('saves stt_language when the selector changes', async () => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(mockSettings)
+    vi.mocked(api.updateSettings).mockResolvedValueOnce({ ...mockSettings, stt_language: 'fi' })
+    render(<MemoryRouter><SettingsPage /></MemoryRouter>)
+    const select = await screen.findByTestId('stt-language-select')
+    fireEvent.change(select, { target: { value: 'fi' } })
+    await waitFor(() => {
+      expect(api.updateSettings).toHaveBeenCalledWith({ stt_language: 'fi' })
     })
   })
 })

@@ -1,6 +1,6 @@
 import { config } from '../config';
 import { getSharedOpenAIClient } from './connectionPool';
-import { STT_MODEL, STT_PROVIDER, STT_FALLBACK_MODEL } from './models';
+import { STT_MODEL, STT_FALLBACK_MODEL } from './models';
 
 export { STT_MODEL };
 
@@ -23,6 +23,15 @@ export interface STTResult {
 }
 
 /**
+ * STT language: 'auto' lets the ASR model detect the language per clip
+ * (Whisper's detection is unreliable on short/ambiguous audio and can return
+ * the transcript in the wrong language); any ISO-639-1 code pins it.
+ */
+export type SttLanguage = string;
+const isAuto = (language: SttLanguage | undefined): boolean =>
+  !language || language === 'auto';
+
+/**
  * Tier 1 (primary): OpenRouter `openai/whisper-large-v3-turbo` pinned to the
  * DeepInfra provider. Selected by Benchmark 6 on the operator's real
  * dictation (1.47% WER at $0.20/1k audio-min vs 1.10% at $3.00 for the
@@ -30,7 +39,7 @@ export interface STTResult {
  * the speculative warm-up in the recordings route keeps final-text latency
  * low without any streaming API.
  */
-async function openrouterTranscribe(audioChunks: Buffer[], prompt?: string): Promise<STTResult> {
+async function openrouterTranscribe(audioChunks: Buffer[], prompt?: string, language: SttLanguage = 'en'): Promise<STTResult> {
   if (!config.openrouterApiKey) {
     throw new Error('OPENROUTER_API_KEY is not configured');
   }
@@ -44,6 +53,7 @@ async function openrouterTranscribe(audioChunks: Buffer[], prompt?: string): Pro
     provider: OPENROUTER_PROVIDER_PIN,
   };
   if (prompt) body.prompt = prompt;
+  if (!isAuto(language)) body.language = language;
   const response = await fetch(openrouterSttUrl(), {
     method: 'POST',
     headers: {
@@ -67,10 +77,10 @@ async function openrouterTranscribe(audioChunks: Buffer[], prompt?: string): Pro
  * multipart API on 127.0.0.1:9000). Free, offline, keeps dictation working
  * when the cloud route is down.
  */
-async function localTranscribe(audioChunks: Buffer[]): Promise<STTResult> {
+async function localTranscribe(audioChunks: Buffer[], language: SttLanguage = 'en'): Promise<STTResult> {
   const audioBuffer = Buffer.concat(audioChunks);
   const form = new FormData();
-  form.append('language', 'en');
+  if (!isAuto(language)) form.append('language', language);
   form.append('audio_file', new Blob([new Uint8Array(audioBuffer)], { type: 'audio/webm' }), 'audio.webm');
   const response = await fetch(localAsrUrl(), { method: 'POST', body: form });
   if (!response.ok) {
@@ -93,7 +103,7 @@ async function localTranscribe(audioChunks: Buffer[]): Promise<STTResult> {
  * until the 2027-02-26 transcription-family removal and keeps dictation
  * alive if both the OpenRouter route and the local service are down.
  */
-async function openAITranscribe(audioChunks: Buffer[], prompt?: string): Promise<STTResult> {
+async function openAITranscribe(audioChunks: Buffer[], prompt?: string, language: SttLanguage = 'en'): Promise<STTResult> {
   const client = getSharedOpenAIClient();
   const audioBuffer = Buffer.concat(audioChunks);
   const file = new File([audioBuffer], 'audio.webm', { type: 'audio/webm' });
@@ -102,6 +112,7 @@ async function openAITranscribe(audioChunks: Buffer[], prompt?: string): Promise
     file,
     response_format: 'text',
     ...(prompt ? { prompt } : {}),
+    ...(!isAuto(language) ? { language } : {}),
   });
   return {
     text: typeof response === 'string' ? response : String(response),
@@ -110,18 +121,18 @@ async function openAITranscribe(audioChunks: Buffer[], prompt?: string): Promise
   };
 }
 
-export async function transcribeWithFallback(audioChunks: Buffer[], prompt?: string): Promise<STTResult> {
+export async function transcribeWithFallback(audioChunks: Buffer[], prompt?: string, language: SttLanguage = 'en'): Promise<STTResult> {
   try {
-    return await openrouterTranscribe(audioChunks, prompt);
+    return await openrouterTranscribe(audioChunks, prompt, language);
   } catch (primaryError) {
     console.error('primary STT (OpenRouter) failed, trying local ASR:', primaryError);
   }
   try {
-    return await localTranscribe(audioChunks);
+    return await localTranscribe(audioChunks, language);
   } catch (localError) {
     console.error('local ASR failed, falling back to OpenAI gpt-transcribe:', localError);
   }
-  return openAITranscribe(audioChunks, prompt);
+  return openAITranscribe(audioChunks, prompt, language);
 }
 
 export interface SpeculativeResult {
@@ -130,10 +141,10 @@ export interface SpeculativeResult {
   startedAt: number;
 }
 
-export function startSpeculativeTranscription(chunks: Buffer[], prompt?: string): SpeculativeResult {
+export function startSpeculativeTranscription(chunks: Buffer[], prompt?: string, language: SttLanguage = 'en'): SpeculativeResult {
   const chunksCopy = chunks.map(c => Buffer.from(c));
   return {
-    promise: transcribeWithFallback(chunksCopy, prompt),
+    promise: transcribeWithFallback(chunksCopy, prompt, language),
     chunkCount: chunks.length,
     startedAt: Date.now(),
   };

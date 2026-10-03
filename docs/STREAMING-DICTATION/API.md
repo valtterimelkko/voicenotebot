@@ -245,9 +245,14 @@ Get current user settings.
 ```json
 {
   "default_cleanup_model": "google/gemma-4-26b-a4b-it",
-  "retention_days": 14
+  "retention_days": 14,
+  "stt_vocabulary": "Claude, Parakeet, ...",
+  "stt_language": "en"
 }
 ```
+
+`stt_language` pins the transcription language: an ISO-639-1 code (e.g. `en`,
+`fi`) or `auto` for per-clip language detection.
 
 ---
 
@@ -260,20 +265,12 @@ Update user settings. Supports partial updates.
 ```json
 {
   "default_cleanup_model": "google/gemma-4-26b-a4b-it",
-  "retention_days": 30
+  "retention_days": 30,
+  "stt_language": "fi"
 }
 ```
 
-Both fields are optional. `default_cleanup_model` must be `"google/gemma-4-26b-a4b-it"` (the only supported cleanup model). `retention_days` must be a number.
-
-**Response (200):** Updated settings object:
-
-```json
-{
-  "default_cleanup_model": "google/gemma-4-26b-a4b-it",
-  "retention_days": 30
-}
-```
+All fields are optional. `default_cleanup_model` must be `"google/gemma-4-26b-a4b-it"` (the only supported cleanup model). `retention_days` must be a number. `stt_language` must be `"auto"` or a two-letter ISO-639-1 code; invalid values are ignored.
 
 ---
 

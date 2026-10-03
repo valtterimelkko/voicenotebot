@@ -16,6 +16,8 @@ export interface Settings {
   default_cleanup_model: string
   retention_days: number
   stt_vocabulary: string
+  /** 'auto' or an ISO-639-1 code that pins the STT language. */
+  stt_language: string
   /** What the backend code actually runs — may differ from the stored setting. */
   effective_cleanup_model: string
   cleanup_provider?: string

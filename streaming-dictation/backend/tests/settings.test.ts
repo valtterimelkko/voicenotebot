@@ -19,6 +19,33 @@ describe('settings routes', () => {
     expect(res.body.default_cleanup_model).toBe('gpt-5-nano');
     expect(res.body.retention_days).toBe(60);
     expect(res.body.stt_vocabulary).toBe('');
+    expect(res.body.stt_language).toBe('en');
+  });
+
+  it('PUT / updates stt_language', async () => {
+    const res = await request(app)
+      .put('/api/settings')
+      .send({ stt_language: 'fi' });
+    expect(res.status).toBe(200);
+    expect(res.body.stt_language).toBe('fi');
+  });
+
+  it('PUT / accepts auto as stt_language', async () => {
+    const res = await request(app)
+      .put('/api/settings')
+      .send({ stt_language: 'auto' });
+    expect(res.status).toBe(200);
+    expect(res.body.stt_language).toBe('auto');
+  });
+
+  it('PUT / ignores invalid stt_language values', async () => {
+    for (const bad of ['english', 'EN', 'xyz', 'e', 42]) {
+      const res = await request(app)
+        .put('/api/settings')
+        .send({ stt_language: bad });
+      expect(res.status).toBe(200);
+      expect(res.body.stt_language).toBe('en');
+    }
   });
 
   it('GET / reports what actually runs, from code constants not the DB', async () => {

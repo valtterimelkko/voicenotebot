@@ -7,6 +7,17 @@ const CLEANUP_MODELS = [
   { value: 'google/gemma-4-26b-a4b-it', label: 'Gemma 4 26B A4B', description: 'via OpenRouter — highest fidelity in the B5 benchmark, fastest real cleanup' }
 ] as const
 
+const STT_LANGUAGES = [
+  { value: 'en', label: 'English' },
+  { value: 'auto', label: 'Auto-detect' },
+  { value: 'fi', label: 'Finnish' },
+  { value: 'sv', label: 'Swedish' },
+  { value: 'es', label: 'Spanish' },
+  { value: 'de', label: 'German' },
+  { value: 'fr', label: 'French' },
+  { value: 'is', label: 'Icelandic' }
+] as const
+
 export function SettingsPage() {
   const [settings, setSettingsLocal] = useState<Settings | null>(null)
   const [loading, setLoading] = useState(true)
@@ -32,6 +43,24 @@ export function SettingsPage() {
     setError('')
     try {
       const updated = await api.updateSettings({ default_cleanup_model: model })
+      setSettingsLocal(updated)
+      setStore(updated)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2500)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to save settings')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleLanguageChange = async (language: string) => {
+    if (!settings || saving) return
+    setSaving(true)
+    setSaved(false)
+    setError('')
+    try {
+      const updated = await api.updateSettings({ stt_language: language })
       setSettingsLocal(updated)
       setStore(updated)
       setSaved(true)
@@ -165,6 +194,27 @@ export function SettingsPage() {
             <span className="text-xs text-green-600 font-medium">✓ Saved</span>
           )}
         </div>
+      </section>
+
+      {/* Dictation language */}
+      <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-700">Dictation language</h3>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Pinning the language stops the transcriber returning transcripts in the wrong language on short or ambiguous audio. Use Auto-detect only if you switch languages often.
+          </p>
+        </div>
+        <select
+          data-testid="stt-language-select"
+          value={STT_LANGUAGES.some(l => l.value === settings?.stt_language) ? settings?.stt_language : 'en'}
+          onChange={(e) => void handleLanguageChange(e.target.value)}
+          disabled={saving}
+          className="w-full text-sm border border-slate-200 rounded-lg p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:opacity-50"
+        >
+          {STT_LANGUAGES.map(({ value, label }) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
       </section>
 
       {/* STT Vocabulary */}

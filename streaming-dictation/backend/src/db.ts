@@ -40,13 +40,24 @@ export function initDatabase(dbPath: string): Database.Database {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       default_cleanup_model TEXT NOT NULL DEFAULT 'gpt-5-nano',
       retention_days INTEGER NOT NULL DEFAULT 60,
-      stt_vocabulary TEXT NOT NULL DEFAULT ''
+      stt_vocabulary TEXT NOT NULL DEFAULT '',
+      stt_language TEXT NOT NULL DEFAULT 'en'
     );
   `);
 
   // Migration: add stt_vocabulary column to existing databases that predate it
   try {
     db.exec(`ALTER TABLE user_settings ADD COLUMN stt_vocabulary TEXT NOT NULL DEFAULT ''`);
+  } catch {
+    // Column already exists — ignore error
+  }
+
+  // Migration: pin the STT language. Whisper's per-clip language auto-detect
+  // misfires on short/ambiguous audio and returns the transcript in the wrong
+  // language (observed: English dictations returned as Spanish/Icelandic).
+  // Existing rows default to 'en'; 'auto' restores the old behaviour.
+  try {
+    db.exec(`ALTER TABLE user_settings ADD COLUMN stt_language TEXT NOT NULL DEFAULT 'en'`);
   } catch {
     // Column already exists — ignore error
   }

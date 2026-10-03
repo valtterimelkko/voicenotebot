@@ -24,6 +24,7 @@ interface SettingsRow {
   default_cleanup_model: string;
   retention_days: number;
   stt_vocabulary: string;
+  stt_language: string;
 }
 
 export function recordingsRouter(db: DB): Router {
@@ -44,14 +45,15 @@ export function recordingsRouter(db: DB): Router {
     activeRecordings.set(id, recording);
 
     const settings = db.prepare(
-      'SELECT stt_vocabulary FROM user_settings WHERE id = 1'
-    ).get() as { stt_vocabulary: string } | undefined;
+      'SELECT stt_vocabulary, stt_language FROM user_settings WHERE id = 1'
+    ).get() as { stt_vocabulary: string; stt_language: string } | undefined;
     const sttVocabulary = settings?.stt_vocabulary ?? '';
+    const sttLanguage = settings?.stt_language ?? 'en';
 
     const specTimer = setTimeout(() => {
       const rec = activeRecordings.get(id);
       if (rec && rec.chunks.length > 0 && !rec.speculative) {
-        rec.speculative = startSpeculativeTranscription(rec.chunks, sttVocabulary);
+        rec.speculative = startSpeculativeTranscription(rec.chunks, sttVocabulary, sttLanguage);
       }
     }, SPECULATIVE_DELAY_MS);
     specTimer.unref();
@@ -83,12 +85,13 @@ export function recordingsRouter(db: DB): Router {
     const durationMs = Date.now() - recording.startedAt;
 
     const settings = db.prepare(
-      'SELECT default_cleanup_model, retention_days, stt_vocabulary FROM user_settings WHERE id = 1'
+      'SELECT default_cleanup_model, retention_days, stt_vocabulary, stt_language FROM user_settings WHERE id = 1'
     ).get() as SettingsRow;
 
     const cleanupModel = settings.default_cleanup_model as CleanupModel;
     const retentionDays = settings.retention_days;
     const sttVocabulary = settings.stt_vocabulary;
+    const sttLanguage = settings.stt_language ?? 'en';
 
     let rawText = '';
     let sttModel = '';
@@ -103,7 +106,7 @@ export function recordingsRouter(db: DB): Router {
       if (hasSpeculative && recording.speculative) {
         sttResult = await recording.speculative.promise;
       } else {
-        sttResult = await transcribeWithFallback(recording.chunks, sttVocabulary);
+        sttResult = await transcribeWithFallback(recording.chunks, sttVocabulary, sttLanguage);
       }
       rawText = sttResult.text;
       sttModel = sttResult.model;
