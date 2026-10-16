@@ -131,7 +131,7 @@ Finalize recording: transcribe audio, run cleanup, store transcript.
   "raw_text": "Raw STT output...",
   "cleaned_text": "Cleaned up transcript...",
   "cleanup_model": "google/gemma-4-26b-a4b-it",
-  "stt_model": "whisper-large-v3-turbo (via OpenRouter; gpt-transcribe as last-resort fallback)",
+  "stt_model": "grok-voice-transcribe-2.0 (xAI; local ASR then gpt-transcribe as fallbacks)",
   "used_fallback": 0,
   "duration_ms": 15420,
   "status": "completed"
@@ -167,7 +167,7 @@ List all transcripts, newest first.
       "raw_text": "...",
       "cleaned_text": "...",
       "cleanup_model": "google/gemma-4-26b-a4b-it",
-      "stt_model": "whisper-large-v3-turbo (via OpenRouter; gpt-transcribe as last-resort fallback)",
+      "stt_model": "grok-voice-transcribe-2.0 (xAI; local ASR then gpt-transcribe as fallbacks)",
       "used_fallback": 0,
       "duration_ms": 15420,
       "status": "completed"
@@ -315,7 +315,7 @@ the process is listening.
 | `raw_text` | string | Direct STT output |
 | `cleaned_text` | string | LLM-processed output |
 | `cleanup_model` | string | `"google/gemma-4-26b-a4b-it"` |
-| `stt_model` | string | `"whisper-large-v3-turbo (via OpenRouter; gpt-transcribe as last-resort fallback)"` |
+| `stt_model` | string | `"grok-voice-transcribe-2.0 (xAI; local ASR then gpt-transcribe as fallbacks)"` |
 | `used_fallback` | number | `1` if batch STT fallback was used, `0` otherwise |
 | `duration_ms` | number \| null | Recording duration in milliseconds |
 | `status` | string | Always `"completed"` |
@@ -332,6 +332,7 @@ the process is listening.
 | `PASSWORD_HASH` | Yes | (empty) | bcrypt hash of the login password |
 | `OPENAI_API_KEY` | Yes | (empty) | OpenAI API key for STT and cleanup |
 | `DEFAULT_CLEANUP_MODEL` | No | `google/gemma-4-26b-a4b-it` | Informational — the cleanup service pins its model in code |
+| `XAI_API_KEY` | **Yes** | — | Required for primary STT (xAI Grok) |
 | `OPENROUTER_API_KEY` | **Yes** | — | Required for cleanup (OpenRouter route) |
 | `RETENTION_DAYS` | No | `14` | Days before transcripts are auto-deleted |
 | `DATABASE_PATH` | No | `data/transcripts.db` | SQLite database file path |
@@ -342,7 +343,7 @@ the process is listening.
 
 Transcript cleanup calls the OpenRouter chat completions endpoint
 (`https://openrouter.ai/api/v1/chat/completions`) directly, using
-`OPENROUTER_API_KEY` (STT keeps `OPENAI_API_KEY`).
+`OPENROUTER_API_KEY` (STT uses `XAI_API_KEY`, with `OPENAI_API_KEY` for the last-resort tier).
 
 - **Model**: `google/gemma-4-26b-a4b-it` (non-reasoning; thinking off)
 - **Temperature**: 0.3 (matches Benchmark 5 conditions)

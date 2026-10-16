@@ -16,7 +16,7 @@ vi.mock('openai', () => ({
 }));
 
 const { configState } = vi.hoisted(() => ({
-  configState: { openrouterApiKey: 'test-or-key' as string | undefined },
+  configState: { xaiApiKey: 'test-xai-key' as string | undefined },
 }));
 
 vi.mock('../src/config', () => ({
@@ -93,56 +93,75 @@ afterAll(() => {
 describe('transcribeWithFallback tiers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    configState.openrouterApiKey = 'test-or-key';
-    setEnv('OPENROUTER_API_KEY', 'test-or-key');
-    setEnv('OPENROUTER_STT_URL', undefined);
+    configState.xaiApiKey = 'test-xai-key';
+        setEnv('XAI_STT_URL', undefined);
     setEnv('LOCAL_ASR_URL', undefined);
   });
 
-  it('uses the OpenRouter whisper-turbo tier first (DeepInfra pin, webm body)', async () => {
+  it('uses the xAI Grok STT tier first (multipart, file last, key terms from the vocabulary)', async () => {
     const fake = await fakeSttServer(200, { text: 'primary text' });
-    setEnv('OPENROUTER_STT_URL', fake.url);
+    setEnv('XAI_STT_URL', fake.url);
     try {
-      const result = await transcribeWithFallback([Buffer.from('chunk-one'), Buffer.from('chunk-two')], 'vocab hint');
+      const result = await transcribeWithFallback([Buffer.from('chunk-one'), Buffer.from('chunk-two')], 'Agent OS, Pi Web UI,  Lifetime ISA');
       expect(result.text).toBe('primary text');
       expect(result.model).toBe(STT_MODEL);
+      expect(result.model).toBe('grok-voice-transcribe-2.0');
       expect(result.usedFallback).toBe(false);
       expect(fake.requests).toHaveLength(1);
-      expect(fake.requests[0].auth).toBe('Bearer test-or-key');
-      const payload = JSON.parse(fake.requests[0].body.toString('utf8'));
-      expect(payload.model).toBe('openai/whisper-large-v3-turbo');
-      expect(payload.provider).toEqual({ order: ['DeepInfra'], allow_fallbacks: false });
-      expect(payload.input_audio.format).toBe('webm');
-      expect(Buffer.from(payload.input_audio.data, 'base64').toString()).toBe('chunk-onechunk-two');
-      expect(payload.prompt).toBe('vocab hint');
+      expect(fake.requests[0].auth).toBe('Bearer test-xai-key');
+      expect(fake.requests[0].contentType).toContain('multipart/form-data');
+      const body = fake.requests[0].body.toString('utf8');
+      expect(body).toMatch(/name="model"\r\n\r\ngrok-voice-transcribe-2.0\r\n/);
+      expect(body).toMatch(/name="language"\r\n\r\nen\r\n/);
+      expect(body).toMatch(/name="keyterm"\r\n\r\nAgent OS\r\n/);
+      expect(body).toMatch(/name="keyterm"\r\n\r\nPi Web UI\r\n/);
+      expect(body).toMatch(/name="keyterm"\r\n\r\nLifetime ISA\r\n/);
+      expect(body).toContain('chunk-onechunk-two');
+      // xAI requires the file to be the LAST multipart field.
+      expect(body.lastIndexOf('name="file"')).toBeGreaterThan(body.lastIndexOf('name="keyterm"'));
+      expect(body.lastIndexOf('name="file"')).toBeGreaterThan(body.lastIndexOf('name="language"'));
       expect(mockTranscriptionCreate).not.toHaveBeenCalled();
     } finally {
       fake.close();
     }
   });
 
-  it('falls back to the local Parakeet service when OpenRouter fails', async () => {
-    const orFail = await fakeSttServer(500, { error: 'down' });
+  it('caps key terms at 100 terms of 50 characters', async () => {
+    const fake = await fakeSttServer(200, { text: 'ok' });
+    setEnv('XAI_STT_URL', fake.url);
+    try {
+      const many = Array.from({ length: 130 }, (_, i) => `term${i}`).join(', ') + ', ' + 'x'.repeat(80);
+      await transcribeWithFallback([Buffer.from('a')], many);
+      const body = fake.requests[0].body.toString('utf8');
+      expect((body.match(/name="keyterm"/g) ?? []).length).toBe(100);
+      expect(body).not.toMatch(/x{51}/);
+    } finally {
+      fake.close();
+    }
+  });
+
+  it('falls back to the local ASR service when xAI fails', async () => {
+    const xaiFail = await fakeSttServer(500, { error: 'down' });
     const local = await fakeSttServer(200, { text: 'local text' });
-    setEnv('OPENROUTER_STT_URL', orFail.url);
+    setEnv('XAI_STT_URL', xaiFail.url);
     setEnv('LOCAL_ASR_URL', local.url);
     try {
       const result = await transcribeWithFallback([Buffer.from('audio')]);
       expect(result.text).toBe('local text');
       expect(result.usedFallback).toBe(true);
-      expect(result.model).toContain('parakeet');
+      expect(result.model).toBe('local-asr');
       expect(local.requests).toHaveLength(1);
       expect(local.requests[0].contentType).toContain('multipart/form-data');
       expect(local.requests[0].body.toString('utf8')).toContain('name="audio_file"');
       expect(mockTranscriptionCreate).not.toHaveBeenCalled();
     } finally {
-      orFail.close(); local.close();
+      xaiFail.close(); local.close();
     }
   });
 
   it('uses OpenAI gpt-transcribe as the last resort when both tiers fail', async () => {
-    const orFail = await fakeSttServer(500, { error: 'down' });
-    setEnv('OPENROUTER_STT_URL', orFail.url);
+    const xaiFail = await fakeSttServer(500, { error: 'down' });
+    setEnv('XAI_STT_URL', xaiFail.url);
     setEnv('LOCAL_ASR_URL', 'http://127.0.0.1:9/asr'); // nothing listens
     mockTranscriptionCreate.mockResolvedValue('openai last resort text');
     try {
@@ -154,22 +173,22 @@ describe('transcribeWithFallback tiers', () => {
       const call = mockTranscriptionCreate.mock.calls[0][0];
       expect(call.model).toBe('gpt-transcribe');
     } finally {
-      orFail.close();
+      xaiFail.close();
     }
   });
 
-  it('skips the OpenRouter tier entirely when no key is configured', async () => {
-    configState.openrouterApiKey = '';
-    const orFail = await fakeSttServer(200, { text: 'should not be reached' });
+  it('skips the xAI tier entirely when no key is configured', async () => {
+    configState.xaiApiKey = '';
+    const xaiFail = await fakeSttServer(200, { text: 'should not be reached' });
     const local = await fakeSttServer(200, { text: 'local text' });
-    setEnv('OPENROUTER_STT_URL', orFail.url);
+    setEnv('XAI_STT_URL', xaiFail.url);
     setEnv('LOCAL_ASR_URL', local.url);
     try {
       const result = await transcribeWithFallback([Buffer.from('audio')]);
       expect(result.text).toBe('local text');
-      expect(orFail.requests).toHaveLength(0);
+      expect(xaiFail.requests).toHaveLength(0);
     } finally {
-      orFail.close(); local.close();
+      xaiFail.close(); local.close();
     }
   });
 });
@@ -177,20 +196,19 @@ describe('transcribeWithFallback tiers', () => {
 describe('language pinning (wrong-language transcript fix)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    configState.openrouterApiKey = 'test-or-key';
-    setEnv('OPENROUTER_API_KEY', 'test-or-key');
-    setEnv('OPENROUTER_STT_URL', undefined);
+    configState.xaiApiKey = 'test-xai-key';
+        setEnv('XAI_STT_URL', undefined);
     setEnv('LOCAL_ASR_URL', undefined);
   });
 
-  it('pins the configured language in the OpenRouter request body', async () => {
+  it('pins the configured language in the xAI request', async () => {
     const fake = await fakeSttServer(200, { text: 'pinned text' });
-    setEnv('OPENROUTER_STT_URL', fake.url);
+    setEnv('XAI_STT_URL', fake.url);
     try {
       await transcribeWithFallback([Buffer.from('audio')], undefined, 'en');
       expect(fake.requests).toHaveLength(1);
-      const payload = JSON.parse(fake.requests[0].body.toString('utf8'));
-      expect(payload.language).toBe('en');
+      const body = fake.requests[0].body.toString('utf8');
+      expect(body).toMatch(/name="language"\r\n\r\nen\r\n/);
     } finally {
       fake.close();
     }
@@ -198,20 +216,19 @@ describe('language pinning (wrong-language transcript fix)', () => {
 
   it('omits the language field when language is auto', async () => {
     const fake = await fakeSttServer(200, { text: 'auto text' });
-    setEnv('OPENROUTER_STT_URL', fake.url);
+    setEnv('XAI_STT_URL', fake.url);
     try {
       await transcribeWithFallback([Buffer.from('audio')], undefined, 'auto');
-      const payload = JSON.parse(fake.requests[0].body.toString('utf8'));
-      expect('language' in payload).toBe(false);
+      expect(fake.requests[0].body.toString('utf8')).not.toContain('name="language"');
     } finally {
       fake.close();
     }
   });
 
-  it('passes the configured language to the local Parakeet fallback', async () => {
-    const orFail = await fakeSttServer(500, { error: 'down' });
+  it('passes the configured language to the local ASR fallback', async () => {
+    const xaiFail = await fakeSttServer(500, { error: 'down' });
     const local = await fakeSttServer(200, { text: 'local text' });
-    setEnv('OPENROUTER_STT_URL', orFail.url);
+    setEnv('XAI_STT_URL', xaiFail.url);
     setEnv('LOCAL_ASR_URL', local.url);
     try {
       await transcribeWithFallback([Buffer.from('audio')], undefined, 'fi');
@@ -219,13 +236,13 @@ describe('language pinning (wrong-language transcript fix)', () => {
       expect(body).toContain('name="language"');
       expect(body).toMatch(/name="language"\r\n\r\nfi\r\n/);
     } finally {
-      orFail.close(); local.close();
+      xaiFail.close(); local.close();
     }
   });
 
   it('passes the language to the OpenAI last-resort tier', async () => {
-    const orFail = await fakeSttServer(500, { error: 'down' });
-    setEnv('OPENROUTER_STT_URL', orFail.url);
+    const xaiFail = await fakeSttServer(500, { error: 'down' });
+    setEnv('XAI_STT_URL', xaiFail.url);
     setEnv('LOCAL_ASR_URL', 'http://127.0.0.1:9/asr'); // nothing listens
     mockTranscriptionCreate.mockResolvedValue('openai last resort text');
     try {
@@ -233,18 +250,17 @@ describe('language pinning (wrong-language transcript fix)', () => {
       expect(mockTranscriptionCreate).toHaveBeenCalledTimes(1);
       expect(mockTranscriptionCreate.mock.calls[0][0].language).toBe('en');
     } finally {
-      orFail.close();
+      xaiFail.close();
     }
   });
 
   it('startSpeculativeTranscription carries the language pin', async () => {
     const fake = await fakeSttServer(200, { text: 'speculative text' });
-    setEnv('OPENROUTER_STT_URL', fake.url);
+    setEnv('XAI_STT_URL', fake.url);
     try {
       const spec = startSpeculativeTranscription([Buffer.from('a')], undefined, 'en');
       await spec.promise;
-      const payload = JSON.parse(fake.requests[0].body.toString('utf8'));
-      expect(payload.language).toBe('en');
+      expect(fake.requests[0].body.toString('utf8')).toMatch(/name="language"\r\n\r\nen\r\n/);
     } finally {
       fake.close();
     }
@@ -254,13 +270,12 @@ describe('language pinning (wrong-language transcript fix)', () => {
 describe('speculative transcription contract (unchanged)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    configState.openrouterApiKey = 'test-or-key';
-    setEnv('OPENROUTER_API_KEY', 'test-or-key');
-  });
+    configState.xaiApiKey = 'test-xai-key';
+      });
 
   it('startSpeculativeTranscription snapshots chunks and resolves to a result', async () => {
     const fake = await fakeSttServer(200, { text: 'speculative text' });
-    setEnv('OPENROUTER_STT_URL', fake.url);
+    setEnv('XAI_STT_URL', fake.url);
     try {
       const spec = startSpeculativeTranscription([Buffer.from('a'), Buffer.from('b')]);
       expect(spec.chunkCount).toBe(2);

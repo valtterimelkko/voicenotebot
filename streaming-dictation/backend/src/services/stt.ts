@@ -4,13 +4,15 @@ import { STT_MODEL, STT_FALLBACK_MODEL } from './models';
 
 export { STT_MODEL };
 
-const OPENROUTER_STT_URL_DEFAULT = 'https://openrouter.ai/api/v1/audio/transcriptions';
+const XAI_STT_URL_DEFAULT = 'https://api.x.ai/v1/stt';
 const LOCAL_ASR_URL_DEFAULT = 'http://127.0.0.1:9000/asr';
-const OPENROUTER_PROVIDER_PIN = { order: ['DeepInfra'], allow_fallbacks: false } as const;
+const XAI_TIMEOUT_MS = 60_000;
+const XAI_MAX_KEYTERMS = 100;
+const XAI_MAX_KEYTERM_CHARS = 50;
 
 // Resolved at call time so tests (and ops) can redirect endpoints via env.
-function openrouterSttUrl(): string {
-  return process.env.OPENROUTER_STT_URL || OPENROUTER_STT_URL_DEFAULT;
+function xaiSttUrl(): string {
+  return process.env.XAI_STT_URL || XAI_STT_URL_DEFAULT;
 }
 function localAsrUrl(): string {
   return process.env.LOCAL_ASR_URL || LOCAL_ASR_URL_DEFAULT;
@@ -31,51 +33,54 @@ export type SttLanguage = string;
 const isAuto = (language: SttLanguage | undefined): boolean =>
   !language || language === 'auto';
 
+/** Split the comma/newline separated custom vocabulary into xAI key terms. */
+function toKeyterms(vocabulary?: string): string[] {
+  if (!vocabulary) return [];
+  return vocabulary
+    .split(/[,\n]/)
+    .map((t) => t.trim().slice(0, XAI_MAX_KEYTERM_CHARS))
+    .filter(Boolean)
+    .slice(0, XAI_MAX_KEYTERMS);
+}
+
 /**
- * Tier 1 (primary): OpenRouter `openai/whisper-large-v3-turbo` pinned to the
- * DeepInfra provider. Selected by Benchmark 6 on the operator's real
- * dictation (1.47% WER at $0.20/1k audio-min vs 1.10% at $3.00 for the
- * retired-by-2027-02-26 gpt-4o-mini-transcribe). Endpoint is one-shot JSON:
- * the speculative warm-up in the recordings route keeps final-text latency
- * low without any streaming API.
+ * Tier 1 (primary): xAI Grok speech-to-text (`grok-voice-transcribe-2.0`).
+ * Chosen 2026-10-16 on the operator's real voice: no phantom "Thank you."
+ * on pauses/quiet audio (which whisper-large-v3-turbo produced), ~1.2-2 s
+ * for a 47 s clip, $0.10 per audio hour. It keeps stutters and spells numbers
+ * out; the cleanup model normalises both. The vocabulary becomes key terms.
+ * xAI requires the `file` multipart field to come last.
  */
-async function openrouterTranscribe(audioChunks: Buffer[], prompt?: string, language: SttLanguage = 'en'): Promise<STTResult> {
-  if (!config.openrouterApiKey) {
-    throw new Error('OPENROUTER_API_KEY is not configured');
+async function xaiTranscribe(audioChunks: Buffer[], prompt?: string, language: SttLanguage = 'en'): Promise<STTResult> {
+  if (!config.xaiApiKey) {
+    throw new Error('XAI_API_KEY is not configured');
   }
   const audioBuffer = Buffer.concat(audioChunks);
-  const body: Record<string, unknown> = {
-    model: STT_MODEL,
-    input_audio: {
-      data: audioBuffer.toString('base64'),
-      format: 'webm',
-    },
-    provider: OPENROUTER_PROVIDER_PIN,
-  };
-  if (prompt) body.prompt = prompt;
-  if (!isAuto(language)) body.language = language;
-  const response = await fetch(openrouterSttUrl(), {
+  const form = new FormData();
+  form.append('model', STT_MODEL);
+  if (!isAuto(language)) form.append('language', language);
+  for (const term of toKeyterms(prompt)) form.append('keyterm', term);
+  form.append('file', new Blob([new Uint8Array(audioBuffer)], { type: 'audio/webm' }), 'audio.webm');
+  const response = await fetch(xaiSttUrl(), {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.openrouterApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
+    headers: { Authorization: `Bearer ${config.xaiApiKey}` },
+    body: form,
+    signal: AbortSignal.timeout(XAI_TIMEOUT_MS),
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
-    throw new Error(`OpenRouter STT HTTP ${response.status}: ${detail.slice(0, 200)}`);
+    throw new Error(`xAI STT HTTP ${response.status}: ${detail.slice(0, 200)}`);
   }
   const payload = (await response.json()) as { text?: string };
   const text = (payload.text ?? '').trim();
-  if (!text) throw new Error('OpenRouter STT returned an empty transcript');
+  if (!text) throw new Error('xAI STT returned an empty transcript');
   return { text, model: STT_MODEL, usedFallback: false };
 }
 
 /**
- * Tier 2: the host's local Parakeet ASR service (Whisper-compatible
- * multipart API on 127.0.0.1:9000). Free, offline, keeps dictation working
- * when the cloud route is down.
+ * Tier 2: the host's local ASR service (Whisper-compatible multipart API on
+ * 127.0.0.1:9000; Fluid Speech Mini since 2026-10-14). Free, offline, keeps
+ * dictation working when the cloud route is down (slower: ~7 s per 47 s).
  */
 async function localTranscribe(audioChunks: Buffer[], language: SttLanguage = 'en'): Promise<STTResult> {
   const audioBuffer = Buffer.concat(audioChunks);
@@ -95,13 +100,13 @@ async function localTranscribe(audioChunks: Buffer[], language: SttLanguage = 'e
     // plain-text response — keep as-is
   }
   if (!text) throw new Error('local ASR returned an empty transcript');
-  return { text, model: 'parakeet-v3-local', usedFallback: true };
+  return { text, model: 'local-asr', usedFallback: true };
 }
 
 /**
- * Tier 3 (last resort): OpenAI gpt-transcribe on the native API. Works
- * until the 2027-02-26 transcription-family removal and keeps dictation
- * alive if both the OpenRouter route and the local service are down.
+ * Tier 3 (last resort): OpenAI gpt-transcribe on the native API (the
+ * successor model, not affected by the 2027-02-26 removal of the gpt-4o
+ * family). Keeps dictation alive if both xAI and the local service are down.
  */
 async function openAITranscribe(audioChunks: Buffer[], prompt?: string, language: SttLanguage = 'en'): Promise<STTResult> {
   const client = getSharedOpenAIClient();
@@ -123,9 +128,9 @@ async function openAITranscribe(audioChunks: Buffer[], prompt?: string, language
 
 export async function transcribeWithFallback(audioChunks: Buffer[], prompt?: string, language: SttLanguage = 'en'): Promise<STTResult> {
   try {
-    return await openrouterTranscribe(audioChunks, prompt, language);
+    return await xaiTranscribe(audioChunks, prompt, language);
   } catch (primaryError) {
-    console.error('primary STT (OpenRouter) failed, trying local ASR:', primaryError);
+    console.error('primary STT (xAI) failed, trying local ASR:', primaryError);
   }
   try {
     return await localTranscribe(audioChunks, language);

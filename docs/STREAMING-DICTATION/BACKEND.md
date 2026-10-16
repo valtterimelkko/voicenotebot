@@ -69,12 +69,10 @@ If the process restarts during a recording, that in-progress recording is lost.
 ## STT Behaviour
 
 Current model:
-- OpenAI `whisper-large-v3-turbo (via OpenRouter; gpt-transcribe as last-resort fallback)` is the main STT model
-- ⚠️ OpenAI retires it (with whisper-1 and gpt-4o-transcribe) on **2027-02-26**;
-  the named replacements are `gpt-transcribe` (files/batch) and
-  `gpt-live-transcribe` (streaming). Migration is a separate workstream —
-  candidates incl. Groq whisper-turbo and local Parakeet are being evaluated,
-  see session `pi:01a0fd50` in the Agent OS worklog.
+- xAI `grok-voice-transcribe-2.0 (xAI; local ASR then gpt-transcribe as fallbacks)` is the main STT model
+- the primary tier is xAI; the local ASR service is tier 2 and OpenAI `gpt-transcribe` tier 3 (the old gpt-4o family retires 2027-02-26 and is no longer used)
+- the vocabulary setting is sent to xAI as `keyterm` fields (max 100 terms of 50 characters)
+- why not whisper-large-v3-turbo: it invented phrases on pauses and quiet audio (measured 2026-10-16)
 - the backend attempts a primary path first
 - if necessary, it retries via a fallback path
 - longer recordings may benefit from speculative transcription started before `finish`

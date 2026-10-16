@@ -135,6 +135,7 @@ All variables are read from `/root/voicenotebot/streaming-dictation/backend/.env
 | `PASSWORD_HASH` | Yes | (empty) | bcrypt hash for login |
 | `OPENAI_API_KEY` | Yes | (empty) | OpenAI API key (STT and cleanup) |
 | `DEFAULT_CLEANUP_MODEL` | No | `google/gemma-4-26b-a4b-it` | informational; the cleanup service pins its model in code and `/api/settings` reports the truth |
+| `XAI_API_KEY` | **Yes (for STT)** | — | xAI key; primary transcription via `https://api.x.ai/v1/stt` (falls back to local ASR, then OpenAI) |
 | `OPENROUTER_API_KEY` | **Yes (for cleanup)** | — | OpenRouter key; cleanup runs on `google/gemma-4-26b-a4b-it` |
 | `RETENTION_DAYS` | No | `14` | Auto-delete transcripts after N days |
 | `DATABASE_PATH` | No | `data/transcripts.db` | SQLite file path |

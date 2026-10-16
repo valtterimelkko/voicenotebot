@@ -42,13 +42,19 @@ no `language` is pinned. Detection is unreliable on short or ambiguous audio
 (a 2-second clip can land on almost any language), and once the decoder
 commits to a wrong language token it produces output in that language —
 effectively a translation of what was said. Observed 2026-10-03 with
-`openai/whisper-large-v3-turbo` via OpenRouter/DeepInfra.
+`openai/whisper-large-v3-turbo` via OpenRouter/DeepInfra (the former primary; xAI Grok has been primary since 2026-10-16 and takes the same `language` pin).
 
 **Fix**: the `stt_language` setting (Settings → Dictation language) pins the
 language for every STT tier; it defaults to `en`. Only choose `auto` if you
 genuinely dictate in multiple languages — short clips may then come back in
 the wrong language again. The setting is sent as the `language` field on the
-OpenRouter request and as `language` on the local Parakeet and OpenAI tiers.
+xAI request and as `language` on the local ASR and OpenAI tiers.
+
+---
+
+## Invented phrases ("Thank you.", "Bye.") in a transcript
+
+Whisper-family models (the former primary, whisper-large-v3-turbo) invent short phrases on pauses, trailing silence and quiet audio. Measured 2026-10-16: 31 such phrases in ~5,700 words of history against 0 for OpenAI models; reproduced by padding a real clip with silence. xAI Grok (current primary), the local engine and the OpenAI models did not do this. If it reappears, check `stt_model` in `/api/settings`: a fallback tier may be serving.
 
 ---
 

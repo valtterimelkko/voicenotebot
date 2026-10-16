@@ -13,10 +13,10 @@ export const CLEANUP_MODEL = 'google/gemma-4-26b-a4b-it';
 export const CLEANUP_PROVIDER = 'openrouter';
 
 /** Speech-to-text model used for chunk and batch transcription. */
-export const STT_MODEL = 'openai/whisper-large-v3-turbo';
+export const STT_MODEL = 'grok-voice-transcribe-2.0';
 
-/** Route the primary STT model is served on (Benchmark 6 selection). */
-export const STT_PROVIDER = 'openrouter-deepinfra';
+/** Route the primary STT model is served on (chosen 2026-10-16 on real audio). */
+export const STT_PROVIDER = 'xai';
 
 /** Last-resort STT model on the native OpenAI API (retires 2027-02-26). */
 export const STT_FALLBACK_MODEL = 'gpt-transcribe';

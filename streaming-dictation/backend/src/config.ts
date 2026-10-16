@@ -6,6 +6,7 @@ export const config = {
   sessionSecret: process.env.SESSION_SECRET || 'dev-secret-change-in-prod',
   passwordHash: process.env.PASSWORD_HASH || '',
   openaiApiKey: process.env.OPENAI_API_KEY || '',
+  xaiApiKey: process.env.XAI_API_KEY || '',
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
   defaultCleanupModel: (process.env.DEFAULT_CLEANUP_MODEL || 'google/gemma-4-26b-a4b-it') as 'google/gemma-4-26b-a4b-it',
   retentionDays: parseInt(process.env.RETENTION_DAYS || '60', 10),
