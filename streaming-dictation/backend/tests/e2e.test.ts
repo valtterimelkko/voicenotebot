@@ -227,6 +227,37 @@ describe('E2E: full login → recording → transcript → search → copy flow'
     expect(finishRes.body.status).toBe('error');
   });
 
+  async function finishWithRaw(raw: string) {
+    mockedTranscribe.mockResolvedValue({ text: raw, model: 'gpt-transcribe', usedFallback: true });
+    await agent.post('/auth/login').send({ password: 'testpassword' });
+    const recordingId = (await agent.post('/api/recordings/start')).body.id;
+    await agent
+      .post(`/api/recordings/${recordingId}/stream`)
+      .set('Content-Type', 'application/octet-stream')
+      .send(Buffer.from('audio'));
+    return agent.post(`/api/recordings/${recordingId}/finish`);
+  }
+
+  it('skips cleanup when the transcriber heard no words, and marks the recording failed (owner, 2026-10-26)', async () => {
+    // A broken or silent recording came back as one character; the cleanup model then answered it like a chat
+    // ("Please provide the transcript…") and that reply was pasted as if the owner had said it.
+    for (const raw of ['.', ' ', 'a', '…!']) {
+      mockedCleanup.mockClear();
+      const finishRes = await finishWithRaw(raw);
+      expect(finishRes.status).toBe(200);
+      expect(mockedCleanup).not.toHaveBeenCalled();
+      expect(finishRes.body.raw_text).toBe('');
+      expect(finishRes.body.cleaned_text).toBe('');
+      expect(finishRes.body.status).toBe('error');
+    }
+  });
+
+  it('still cleans a short real dictation', async () => {
+    const finishRes = await finishWithRaw('Yes');
+    expect(mockedCleanup).toHaveBeenCalledOnce();
+    expect(finishRes.body.status).toBe('completed');
+  });
+
   it('handles cleanup failure gracefully', async () => {
     mockedTranscribe.mockResolvedValue({
       text: 'Some raw text',

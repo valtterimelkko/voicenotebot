@@ -349,6 +349,10 @@ Transcript cleanup calls the OpenRouter chat completions endpoint
 - **Temperature**: 0.3 (matches Benchmark 5 conditions)
 - **Retry**: once on transient 429/5xx; then the route logs `cleanup_failed`
   and keeps the raw transcript
+- **No words heard**: when the transcript has fewer than two letters (a silent or
+  broken recording), cleanup is skipped, the route logs `stt_no_words` and the
+  transcript is saved with empty text and `status: "error"`, so the model never
+  answers a near-empty input as if it were a chat message
 - **Response**: `choices[0].message.content`, post-processed by the British
   -ise spelling pass
 

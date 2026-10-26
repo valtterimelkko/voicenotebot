@@ -20,6 +20,14 @@ const activeRecordings = new Map<string, ActiveRecording>();
 
 const SPECULATIVE_DELAY_MS = 3_000;
 
+/**
+ * Whether the transcriber heard any words: at least two letters. A broken or silent recording can come back as a
+ * lone character, and the cleanup model then answers it like a chat message instead of cleaning it (2026-10-26).
+ */
+export function heardWords(text: string): boolean {
+  return (text.match(/\p{L}/gu) ?? []).length >= 2;
+}
+
 interface SettingsRow {
   default_cleanup_model: string;
   retention_days: number;
@@ -117,6 +125,17 @@ export function recordingsRouter(db: DB): Router {
       rawText = sttResult.text;
       sttModel = sttResult.model;
       usedFallback = sttResult.usedFallback ? 1 : 0;
+      if (!heardWords(rawText)) {
+        // Nothing usable: no cleanup call, and the row is marked failed like a total STT failure.
+        logger.warn({
+          event: 'stt_no_words',
+          requestId: req.requestId,
+          recordingId: req.params.id,
+          sttModel,
+          rawLength: rawText.length,
+        });
+        rawText = '';
+      }
     } catch (err) {
       // Transcription totally failed. We still persist a row (with empty text)
       // so the user sees something happened, but it is flagged, not silent.
