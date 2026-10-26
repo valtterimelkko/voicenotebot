@@ -170,6 +170,15 @@ cp /root/voicenotebot/streaming-dictation/backend/data/transcripts.db \
    /backup/transcripts-$(date +%Y%m%d).db
 ```
 
+### Who else reads it: the Wheelhouse (Claude app connector)
+
+Since 2026-10-26 the Wheelhouse command centre (`/root/command-centre`) opens this file **read-only** so the owner's
+Claude app can list and read dictations and send one word for word to an agent. Why: the Claude app's voice mode cuts
+the owner off at the first pause, so long instructions are dictated here and handed on by id. It reads the
+`transcripts` columns `id`, `created_at`, `duration_ms`, `cleaned_text`, `raw_text` and `status`; renaming those or
+moving the file breaks only the Wheelhouse's dictation tools, which then say they cannot read the history. Details:
+`/root/command-centre/docs/plans/DICTATIONS.md` and its `docs/DEPENDENCIES.md`.
+
 ## Retention Behaviour
 
 - Retention applies to saved transcript history.
