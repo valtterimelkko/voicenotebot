@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import './types'; // ambient Request.requestId augmentation
 import type { DB } from './db';
-import { sessionMiddleware, requireAuth } from './middleware/auth';
+import { sessionMiddleware, requireAuth, requireAuthOrServiceToken } from './middleware/auth';
 import { requestId } from './middleware/requestId';
 import { requestLogger } from './middleware/requestLogger';
 import { errorHandler } from './middleware/errorHandler';
@@ -45,7 +45,7 @@ export function createApp(db: DB, opts: CreateAppOptions = {}): express.Applicat
   app.locals.db = db;
 
   app.use('/auth', authRouter(db));
-  app.use('/api/recordings', requireAuth, recordingsRouter(db));
+  app.use('/api/recordings', requireAuthOrServiceToken, recordingsRouter(db));
   app.use('/api/transcripts', requireAuth, transcriptsRouter(db));
   app.use('/api/settings', requireAuth, settingsRouter(db));
   app.use('/', healthRouter(db));

@@ -74,6 +74,12 @@ export function recordingsRouter(db: DB): Router {
     res.json({ ok: true });
   });
 
+  // Throw a recording away without transcribing it (the Wheelhouse's mic when the owner leaves mid-dictation).
+  router.post('/:id/abort', (req: Request, res: Response) => {
+    const existed = activeRecordings.delete(req.params.id);
+    res.json({ ok: true, existed });
+  });
+
   router.post('/:id/finish', async (req: Request, res: Response) => {
     const recording = activeRecordings.get(req.params.id);
     if (!recording) {

@@ -1,4 +1,14 @@
+import fs from 'fs';
 import path from 'path';
+
+function readServiceToken(file: string | undefined): string {
+  if (!file) return '';
+  try {
+    return fs.readFileSync(file, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
 
 export const config = {
   port: parseInt(process.env.PORT || '3100', 10),
@@ -6,6 +16,8 @@ export const config = {
   sessionSecret: process.env.SESSION_SECRET || 'dev-secret-change-in-prod',
   passwordHash: process.env.PASSWORD_HASH || '',
   openaiApiKey: process.env.OPENAI_API_KEY || '',
+  /** A local caller's bearer token for the recording routes only (the Wheelhouse on this host); empty = none. */
+  serviceToken: readServiceToken(process.env.SERVICE_TOKEN_FILE),
   xaiApiKey: process.env.XAI_API_KEY || '',
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
   defaultCleanupModel: (process.env.DEFAULT_CLEANUP_MODEL || 'google/gemma-4-26b-a4b-it') as 'google/gemma-4-26b-a4b-it',

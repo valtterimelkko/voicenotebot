@@ -139,6 +139,7 @@ All variables are read from `/root/voicenotebot/streaming-dictation/backend/.env
 | `OPENROUTER_API_KEY` | **Yes (for cleanup)** | — | OpenRouter key; cleanup runs on `google/gemma-4-26b-a4b-it` |
 | `RETENTION_DAYS` | No | `14` | Auto-delete transcripts after N days |
 | `DATABASE_PATH` | No | `data/transcripts.db` | SQLite file path |
+| `SERVICE_TOKEN_FILE` | No | (none) | file holding a bearer token a local caller may use on `/api/recordings/*` only (the Wheelhouse's mic; `/root/.config/streaming-dictation/service-token`, 0600) |
 
 ## Database
 
@@ -178,6 +179,11 @@ the owner off at the first pause, so long instructions are dictated here and han
 `transcripts` columns `id`, `created_at`, `duration_ms`, `cleaned_text`, `raw_text` and `status`; renaming those or
 moving the file breaks only the Wheelhouse's dictation tools, which then say they cannot read the history. Details:
 `/root/command-centre/docs/plans/DICTATIONS.md` and its `docs/DEPENDENCIES.md`.
+
+Since the same day it also **records** through this app: the Wheelhouse's large session view has a mic whose audio
+the centre forwards to `/api/recordings/*` with the local service token (`SERVICE_TOKEN_FILE`; transcripts and
+settings stay password-only), and it may `POST /api/recordings/:id/abort` to drop an unfinished recording. Those
+dictations are saved in this history like any other. Details: `/root/command-centre/docs/plans/LARGE-VIEW.md`.
 
 ## Retention Behaviour
 
