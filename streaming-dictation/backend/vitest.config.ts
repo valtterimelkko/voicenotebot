@@ -9,6 +9,8 @@ export default defineConfig({
     // can't round-trip. Production keeps NODE_ENV=production via its .env.
     env: {
       NODE_ENV: 'test',
+      // Tests that want kept audio point config.failedAudioDir at a temp folder; none writes to data/.
+      FAILED_AUDIO_DIR: '',
     },
     include: ['tests/**/*.test.ts'],
     coverage: {

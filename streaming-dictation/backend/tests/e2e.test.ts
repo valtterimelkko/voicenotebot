@@ -1,9 +1,12 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import bcrypt from 'bcrypt';
 import { config } from '../src/config';
 import { createTestDb, createApp } from './setup';
 import { resetForTesting } from '../src/services/connectionPool';
 import request from 'supertest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 vi.mock('../src/services/stt', () => ({
   transcribeWithFallback: vi.fn().mockResolvedValue({
@@ -282,5 +285,46 @@ describe('E2E: full login → recording → transcript → search → copy flow'
     expect(finishRes.body.cleaned_text).toBe('Some raw text');
     // Cleanup failure with usable raw text is still a completed transcript.
     expect(finishRes.body.status).toBe('completed');
+  });
+
+  describe('failed audio is kept for diagnosis (owner, 2026-10-30)', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'failed-audio-e2e-'));
+      config.failedAudioDir = dir;
+    });
+    afterEach(() => {
+      config.failedAudioDir = '';
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('keeps the audio of a dictation in which no words were heard', async () => {
+      const finishRes = await finishWithRaw('.');
+      expect(finishRes.body.status).toBe('error');
+      const id = finishRes.body.id as string;
+      expect(fs.readFileSync(path.join(dir, `${id}.audio`)).toString()).toBe('audio');
+      expect(JSON.parse(fs.readFileSync(path.join(dir, `${id}.json`), 'utf8')).reason).toBe('no-words');
+    });
+
+    it('keeps the audio when transcription failed outright', async () => {
+      mockedTranscribe.mockRejectedValueOnce(new Error('STT service unavailable'));
+      await agent.post('/auth/login').send({ password: 'testpassword' });
+      const recordingId = (await agent.post('/api/recordings/start')).body.id;
+      await agent.post(`/api/recordings/${recordingId}/stream`).set('Content-Type', 'application/octet-stream').send(Buffer.from('audio'));
+      await agent.post(`/api/recordings/${recordingId}/finish`);
+      expect(JSON.parse(fs.readFileSync(path.join(dir, `${recordingId}.json`), 'utf8')).reason).toBe('stt-failed');
+    });
+
+    it('keeps nothing for a dictation that worked', async () => {
+      const finishRes = await finishWithRaw('Yes, that worked');
+      expect(finishRes.body.status).toBe('completed');
+      expect(fs.readdirSync(dir)).toHaveLength(0);
+    });
+
+    it('keeps nothing when no folder is configured', async () => {
+      config.failedAudioDir = '';
+      await finishWithRaw('.');
+      expect(fs.readdirSync(dir)).toHaveLength(0);
+    });
   });
 });

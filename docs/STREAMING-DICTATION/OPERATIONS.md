@@ -139,6 +139,7 @@ All variables are read from `/root/voicenotebot/streaming-dictation/backend/.env
 | `OPENROUTER_API_KEY` | **Yes (for cleanup)** | — | OpenRouter key; cleanup runs on `google/gemma-4-26b-a4b-it` |
 | `RETENTION_DAYS` | No | `14` | Auto-delete transcripts after N days |
 | `DATABASE_PATH` | No | `data/transcripts.db` | SQLite file path |
+| `FAILED_AUDIO_DIR` | No | `data/failed-audio` | where failed dictations keep their audio for 24 h (see Retention); empty turns it off |
 | `SERVICE_TOKEN_FILE` | No | (none) | file holding a bearer token a local caller may use on `/api/recordings/*` only (the Wheelhouse's mic; `/root/.config/streaming-dictation/service-token`, 0600) |
 
 ## Database
@@ -191,6 +192,12 @@ dictations are saved in this history like any other. Details: `/root/command-cen
 - Expired transcripts are deleted automatically on an interval.
 - The retention period can be changed via env or settings API.
 - In-progress recordings are **not** protected by the database; they live in memory until finish.
+- **Failed dictations keep their audio for 24 hours** (owner, 30 Oct 2026), for every caller (this PWA, the
+  Wheelhouse web UI and apps). Only a finish that heard no words or whose transcription failed outright is kept:
+  `data/failed-audio/<id>.audio` (the chunks joined in arrival order) and `<id>.json` (reason, duration, each
+  chunk's size, the sniffed container, and `headerChunks` — which chunks open with a container header; a header
+  anywhere but chunk 0 means the chunks arrived out of order). Folder 0700, files 0600, pruned at boot and hourly.
+  The log line is `failed_audio_kept`. Successful dictations keep no audio.
 
 ## Performance Notes
 

@@ -5,6 +5,8 @@ import { transcribeWithFallback, startSpeculativeTranscription, shouldUseSpecula
 import { cleanupTranscript, type CleanupModel } from '../services/cleanup';
 import { warmupConnections } from '../services/connectionPool';
 import { logger } from '../services/logger';
+import { config } from '../config';
+import { keepFailedAudio, pruneFailedAudio, type FailedAudioReason } from '../services/failed-audio';
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -110,6 +112,7 @@ export function recordingsRouter(db: DB): Router {
     let rawText = '';
     let sttModel = '';
     let usedFallback = 0;
+    let failure: FailedAudioReason | null = null;
 
     try {
       const hasSpeculative =
@@ -135,11 +138,13 @@ export function recordingsRouter(db: DB): Router {
           rawLength: rawText.length,
         });
         rawText = '';
+        failure = 'no-words';
       }
     } catch (err) {
       // Transcription totally failed. We still persist a row (with empty text)
       // so the user sees something happened, but it is flagged, not silent.
       rawText = '';
+      failure = 'stt-failed';
       logger.error({
         event: 'stt_failed',
         requestId: req.requestId,
@@ -168,6 +173,26 @@ export function recordingsRouter(db: DB): Router {
     }
 
     const status = rawText ? 'completed' : 'error';
+
+    if (failure !== null && config.failedAudioDir !== '') {
+      pruneFailedAudio(config.failedAudioDir);
+      const kept = keepFailedAudio({
+        dir: config.failedAudioDir,
+        id: req.params.id,
+        chunks: recording.chunks,
+        durationMs,
+        sttModel,
+        reason: failure,
+      });
+      logger.warn({
+        event: 'failed_audio_kept',
+        requestId: req.requestId,
+        recordingId: req.params.id,
+        reason: failure,
+        kept: kept !== null,
+        chunkCount: recording.chunks.length,
+      });
+    }
     const previewText = cleanedText.slice(0, 200);
 
     const expiresAt = new Date();

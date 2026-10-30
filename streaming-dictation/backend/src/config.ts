@@ -24,4 +24,6 @@ export const config = {
   retentionDays: parseInt(process.env.RETENTION_DAYS || '60', 10),
   databasePath: process.env.DATABASE_PATH || path.join(__dirname, '..', 'data', 'transcripts.db'),
   sessionTtlMs: 7 * 24 * 60 * 60 * 1000,
+  /** Failed dictations keep their audio here for a day (owner, 2026-10-30); empty turns it off. */
+  failedAudioDir: process.env.FAILED_AUDIO_DIR ?? path.join(__dirname, '..', 'data', 'failed-audio'),
 };
