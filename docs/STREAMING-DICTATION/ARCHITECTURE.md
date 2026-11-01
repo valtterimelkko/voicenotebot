@@ -75,6 +75,12 @@ Browser Microphone
 │  │  Retention Cleanup (every 1 hour)    │  │
 │  │  Deletes transcripts past expiry     │  │
 │  └──────────────────────────────────────┘  │
+│                                             │
+│  ┌──────────────────────────────────────┐  │
+│  │  Failed-Audio Store (24 h)           │  │
+│  │  Keeps failed dictations' audio in   │  │
+│  │  FAILED_AUDIO_DIR (failed-audio.ts)  │  │
+│  └──────────────────────────────────────┘  │
 └─────────────────────────────────────────────┘
 ```
 
