@@ -57,6 +57,21 @@ curl http://localhost:3100/health
 
 ### Legacy Telegram bot
 
+> **Status: switched off on 2026-11-12 (owner decision).** The owner deleted the bot in Telegram, and its four
+> containers (`voicenotebot-webhook`, `voicenotebot-worker-1`, `voicenotebot-worker-2`, `voicenotebot-redis`) were
+> removed with `docker compose down`. Their `restart: always` policy means a plain `docker stop` would bring them back
+> at the next reboot; with the containers removed, nothing recreates them. Streaming Dictation is **not** affected: it
+> is a separate systemd service and uses none of these containers.
+>
+> What was kept: the code, `.env`, the `docker-compose.yml` and the Redis data volume (`voicenotebot_redis_data`). The
+> host edge still routes `/voicenotebot*` on the API host to `voicenotebot-webhook:8000`; it answers 502 while the
+> stack is down.
+>
+> **To turn it back on** (only with the owner's say-so): create a new bot with BotFather and put its token in `.env`
+> (the old bot no longer exists), then run the commands below, set the Telegram webhook to the API host's
+> `/voicenotebot/webhook` path, and add a Telegram secret-token check and a sender allow-list to `webhook/main.py`
+> first. Without them the public webhook accepts anyone's requests.
+
 Configure:
 
 ```bash
