@@ -13,16 +13,18 @@ npm run typecheck
 ```
 
 Result:
-- **125 tests passed**
+- **137 tests passed**
 - typecheck passed
 - lint passes
 
 ### The 11 Nov 2026 long-dictation guard
 
-`tests/stt-coverage.test.ts` (the decoded-duration comparison) and `tests/finish-coverage.test.ts` (the `/finish`
-retry, refusal and kept audio, driven through the recordings router against a fake xAI endpoint) cover the fix
-described in [OPERATIONS](./OPERATIONS.md#transcription-coverage-long-dictations-11-nov-2026). They need no network:
-no real transcription is called.
+`tests/stt-coverage.test.ts` (the decoded-duration comparison and the note's wording),
+`tests/audio-normalise.test.ts` (ffmpeg's progress parsing and segment discovery, with an injected runner) and
+`tests/finish-coverage.test.ts` (the `/finish` conversion, segmentation, stitching, note and kept audio, driven
+through the recordings router against a fake xAI endpoint) cover the fix described in
+[OPERATIONS](./OPERATIONS.md#transcription-coverage-long-dictations-11-nov-2026). They need no network and never run
+`ffmpeg` (the runner is injected); the real binary is exercised on the lab, not in the suite.
 
 ### Frontend
 
@@ -96,7 +98,8 @@ Backend tests currently cover:
 - connection warmup support
 - end-to-end authenticated recording flow
 - graceful handling of STT and cleanup failures
-- transcript coverage: a short upstream decode is retried once, then refused (`status: error`) with the audio kept
+- transcript coverage: a short upstream decode is re-decoded with ffmpeg and transcribed in ≤ 90 s WAV parts; if the
+  audio itself is short the words are kept with one plain note line and the audio is kept
 
 ### Backend test files
 
@@ -113,7 +116,8 @@ Backend tests currently cover:
 | `tests/connectionPool.test.ts` | Unit | Warmup/connection helpers |
 | `tests/e2e.test.ts` | Integration | Full login → recording → transcript → search flow |
 | `tests/stt-coverage.test.ts` | Unit | Decoded-duration comparison and its tolerances |
-| `tests/finish-coverage.test.ts` | Integration | Short decode: one retry, refusal, kept audio |
+| `tests/finish-coverage.test.ts` | Integration | Short decode: conversion, segmented stitching, note, kept audio |
+| `tests/audio-normalise.test.ts` | Unit | ffmpeg progress parsing, segment order, temp-dir cleanup |
 
 ## Frontend Test Coverage
 

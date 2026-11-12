@@ -26,4 +26,11 @@ export const config = {
   sessionTtlMs: 7 * 24 * 60 * 60 * 1000,
   /** Failed dictations keep their audio here for a day (owner, 2026-10-30); empty turns it off. */
   failedAudioDir: process.env.FAILED_AUDIO_DIR ?? path.join(__dirname, '..', 'data', 'failed-audio'),
+  /** ffmpeg, used only to re-decode a recording the upstream transcribed only in part. */
+  ffmpegPath: process.env.FFMPEG_PATH || '/usr/bin/ffmpeg',
+  /**
+   * Laboratory proof switch (owner, 2026-11-12): take every dictation through the ffmpeg conversion, so the whole
+   * path can be exercised on the lab backend with a real long recording. Off unless `FORCE_AUDIO_NORMALISE=1`.
+   */
+  forceAudioNormalise: process.env.FORCE_AUDIO_NORMALISE === '1',
 };

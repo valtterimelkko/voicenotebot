@@ -4,7 +4,13 @@
  * dictation — and the backend must be able to tell, instead of storing half a prompt as a `completed` transcript.
  */
 import { describe, it, expect } from 'vitest';
-import { decodedShort, SHORT_DECODE_MIN_SLACK_SEC, SHORT_DECODE_RATIO } from '../src/services/stt-coverage';
+import {
+  cutShortNote,
+  decodedShort,
+  formatClock,
+  SHORT_DECODE_MIN_SLACK_SEC,
+  SHORT_DECODE_RATIO,
+} from '../src/services/stt-coverage';
 
 describe('decodedShort', () => {
   it('fails open when the tier reported no decoded duration', () => {
@@ -45,5 +51,26 @@ describe('decodedShort', () => {
     expect(decodedShort(Number.NaN, 100)).toBe(false);
     expect(decodedShort(-1, 100)).toBe(false);
     expect(decodedShort(50, 0)).toBe(false);
+  });
+});
+
+describe('the note that tells the owner the rest was lost', () => {
+  it('reads as one plain sentence with mm:ss times', () => {
+    expect(cutShortNote(56.704, 195.559)).toBe(
+      '[Dictation cut short: only the first 0:57 of 3:16 was transcribed. The rest of the recording was lost.]',
+    );
+  });
+
+  it('scales to minutes beyond an hour', () => {
+    expect(cutShortNote(30, 3_725)).toBe(
+      '[Dictation cut short: only the first 0:30 of 1:02:05 was transcribed. The rest of the recording was lost.]',
+    );
+  });
+
+  it('formats whole seconds as mm:ss', () => {
+    expect(formatClock(57)).toBe('0:57');
+    expect(formatClock(195)).toBe('3:15');
+    expect(formatClock(3_725)).toBe('1:02:05');
+    expect(formatClock(0)).toBe('0:00');
   });
 });

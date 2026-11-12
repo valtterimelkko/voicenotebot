@@ -1,9 +1,13 @@
 /**
- * `/finish` coverage (owner, 2026-11-11): a 195.6 s Android dictation came back as 739 characters — a bit more than a
- * quarter of it — with no error anywhere, because xAI had answered 200 with the part of the audio it managed to decode
- * and the backend stored that as a `completed` transcript.
+ * `/finish` coverage (owner, 2026-11-11; round 2, 2026-11-12).
  *
- * These tests drive the recordings router with a fake xAI endpoint that reports the decoded duration xAI really sends.
+ * A 3 min 15 s Android dictation came back as 739 characters — a bit more than a quarter of it — with no error
+ * anywhere, because xAI answers 200 with the part of the audio it managed to decode. Round 1 refused that as an
+ * `error`; round 2 makes the retry meaningful (ffmpeg re-decodes the recording, ≤ 90 s segments) and, when the audio
+ * itself is short, keeps the words with one plain note line instead of the apps' "No words were heard".
+ *
+ * The fake xAI endpoint answers from a queue and records what it received, so both the transcript and the declared
+ * audio format are observable.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
@@ -18,22 +22,33 @@ vi.mock('../src/services/cleanup', () => ({
   cleanupTranscript: vi.fn(async (text: string) => ({ cleanedText: text, model: 'gpt-5-nano' })),
 }));
 
+vi.mock('../src/services/audio-normalise', () => ({
+  decodeToSegments: vi.fn(),
+  AudioDecodeError: class AudioDecodeError extends Error {},
+}));
+
 import { recordingsRouter } from '../src/routes/recordings';
+import { decodeToSegments, AudioDecodeError } from '../src/services/audio-normalise';
+
+const mockedDecode = vi.mocked(decodeToSegments);
 
 interface FakeXai {
   url: string;
   calls: number;
+  bodies: string[];
   close: () => void;
 }
 
 /** A fake xAI STT endpoint that answers each call from `answers` (the last one repeats). */
 function fakeXai(answers: Array<{ text: string; duration?: number }>): Promise<FakeXai> {
-  const state: FakeXai = { url: '', calls: 0, close: () => {} };
+  const state: FakeXai = { url: '', calls: 0, bodies: [], close: () => {} };
   const server = http.createServer((req, res) => {
-    req.on('data', () => undefined);
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
       const answer = answers[Math.min(state.calls, answers.length - 1)];
       state.calls += 1;
+      state.bodies.push(Buffer.concat(chunks).toString('latin1'));
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(answer));
     });
@@ -51,6 +66,7 @@ function fakeXai(answers: Array<{ text: string; duration?: number }>): Promise<F
 
 const RECORDED_MS = 195_559;
 const TOTAL_CHUNKS = 48;
+const NOTE_PREFIX = '[Dictation cut short:';
 
 describe('/finish: a transcript that covers only part of the recording', () => {
   let app: ReturnType<typeof createTestApp>;
@@ -66,13 +82,15 @@ describe('/finish: a transcript that covers only part of the recording', () => {
     else process.env[name] = value;
   }
 
-  beforeEach(async () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
     clock = 1_000_000;
     failedAudioDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stt-coverage-'));
     setEnv('LOCAL_ASR_URL', 'http://127.0.0.1:9/asr'); // nothing listens: the local tier must not mask a failure
     config.xaiApiKey = 'test-xai-key';
     config.failedAudioDir = failedAudioDir;
     config.serviceToken = '';
+    config.forceAudioNormalise = false;
     db = createTestDb();
     app = createTestApp();
     app.use(
@@ -109,72 +127,110 @@ describe('/finish: a transcript that covers only part of the recording', () => {
     return request(app).post(`/api/recordings/${id}/finish`).send({});
   }
 
-  it('retries once with the whole recording and keeps the full transcript when the retry covers it', async () => {
+  function keptMeta(): { reason: string; durationMs: number } {
+    const names = fs.readdirSync(failedAudioDir);
+    const json = names.find((name) => name.endsWith('.json'));
+    expect(json).toBeDefined();
+    return JSON.parse(fs.readFileSync(path.join(failedAudioDir, json as string), 'utf8')) as {
+      reason: string;
+      durationMs: number;
+    };
+  }
+
+  it('re-decodes with ffmpeg, transcribes the segments in order and returns the whole dictation', async () => {
     xai = await fakeXai([
-      { text: 'okay so actually two things now I am attaching', duration: 56.704 },
-      { text: 'okay so actually two things now '.repeat(80).trim(), duration: 191.2 },
+      { text: 'okay so actually two things now I am attaching', duration: 56.704 }, // the direct attempt
+      { text: 'Part one words.', duration: 89.9 }, // converted segment 0
+      { text: 'Part two words.', duration: 89.9 }, // converted segment 1
+      { text: 'Part three words.', duration: 15.2 }, // converted segment 2
     ]);
     setEnv('XAI_STT_URL', xai.url);
+    mockedDecode.mockResolvedValue({
+      segments: [Buffer.from('seg0'), Buffer.from('seg1'), Buffer.from('seg2')],
+      decodedSec: 195.0,
+    });
 
     const res = await dictate();
 
     expect(res.status).toBe(200);
-    expect(xai.calls).toBe(2);
+    expect(mockedDecode).toHaveBeenCalledTimes(1);
+    expect(xai.calls).toBe(4); // direct, then one request per segment
+    expect(res.body.raw_text).toBe('Part one words. Part two words. Part three words.');
     expect(res.body.status).toBe('completed');
-    expect(res.body.raw_text.length).toBeGreaterThan(2000);
+    expect(res.body.cleaned_text).not.toContain(NOTE_PREFIX); // nothing was lost, so no note
     expect(fs.readdirSync(failedAudioDir)).toEqual([]);
+    // The segments go up as plain WAV, not as the webm they are not.
+    expect(xai.bodies.slice(1).every((body) => body.includes('audio/wav') && body.includes('audio.wav'))).toBe(true);
   });
 
-  it('refuses to call a short decode complete, keeps the audio, and keeps the words it did hear', async () => {
+  it('keeps the words and adds one plain note when ffmpeg also decodes the audio short', async () => {
     xai = await fakeXai([{ text: 'okay so actually two things now I am attaching', duration: 56.704 }]);
     setEnv('XAI_STT_URL', xai.url);
+    mockedDecode.mockResolvedValue({ segments: [Buffer.from('seg0')], decodedSec: 56.8 });
 
     const res = await dictate();
 
     expect(res.status).toBe(200);
-    expect(xai.calls).toBe(2); // one retry, then it gives up
-    expect(res.body.status).toBe('error');
-    // The partial words stay in the row: the owner can still recover them from history.
+    expect(xai.calls).toBe(1); // the audio is short: no upstream retry at all
+    expect(res.body.status).toBe('completed');
     expect(res.body.raw_text).toBe('okay so actually two things now I am attaching');
-    const kept = fs.readdirSync(failedAudioDir);
-    expect(kept.filter((name) => name.endsWith('.audio'))).toHaveLength(1);
-    const meta = JSON.parse(
-      fs.readFileSync(
-        path.join(
-          failedAudioDir,
-          kept.find((name) => name.endsWith('.json')) as string,
-        ),
-        'utf8',
-      ),
-    ) as { reason: string; durationMs: number };
-    expect(meta.reason).toBe('short-decode');
-    expect(meta.durationMs).toBe(RECORDED_MS);
+    expect(res.body.cleaned_text).toContain(`${NOTE_PREFIX} only the first 0:57 of 3:16 was transcribed.`);
+    expect(keptMeta().reason).toBe('short-decode');
+    expect(keptMeta().durationMs).toBe(RECORDED_MS);
   });
 
-  it('does no retry and answers complete when the decode covers the recording', async () => {
+  it('never adds the note to raw_text, and adds it only once', async () => {
+    xai = await fakeXai([{ text: 'half a dictation', duration: 10 }]);
+    setEnv('XAI_STT_URL', xai.url);
+    mockedDecode.mockResolvedValue({ segments: [Buffer.from('seg0')], decodedSec: 10 });
+
+    const res = await dictate();
+
+    expect(res.body.raw_text).toBe('half a dictation');
+    expect(res.body.cleaned_text.match(/Dictation cut short/g)).toHaveLength(1);
+  });
+
+  it('falls back to one plain retry when ffmpeg is unusable, and still prefers what covers more', async () => {
+    xai = await fakeXai([
+      { text: 'first attempt short', duration: 56.7 },
+      { text: 'retry covers everything', duration: 191.2 },
+    ]);
+    setEnv('XAI_STT_URL', xai.url);
+    mockedDecode.mockRejectedValue(new AudioDecodeError('ffmpeg is not installed'));
+
+    const res = await dictate();
+
+    expect(xai.calls).toBe(2);
+    expect(res.body.status).toBe('completed');
+    expect(res.body.raw_text).toBe('retry covers everything');
+    expect(res.body.cleaned_text).not.toContain(NOTE_PREFIX);
+  });
+
+  it('adds the note, not an error, when both the retry and the audio stay short and ffmpeg died', async () => {
+    xai = await fakeXai([{ text: 'first attempt short', duration: 56.7 }]);
+    setEnv('XAI_STT_URL', xai.url);
+    mockedDecode.mockRejectedValue(new AudioDecodeError('ffmpeg exploded'));
+
+    const res = await dictate();
+
+    expect(xai.calls).toBe(2);
+    expect(res.body.status).toBe('completed');
+    expect(res.body.cleaned_text).toContain(NOTE_PREFIX);
+    expect(keptMeta().reason).toBe('short-decode');
+  });
+
+  it('does no conversion and no note when the decode covers the recording', async () => {
     xai = await fakeXai([{ text: 'the whole dictation', duration: 191.2 }]);
     setEnv('XAI_STT_URL', xai.url);
 
     const res = await dictate();
 
+    expect(mockedDecode).not.toHaveBeenCalled();
     expect(xai.calls).toBe(1);
     expect(res.body.status).toBe('completed');
     expect(res.body.raw_text).toBe('the whole dictation');
+    expect(res.body.cleaned_text).not.toContain(NOTE_PREFIX);
     expect(fs.readdirSync(failedAudioDir)).toEqual([]);
-  });
-
-  it('keeps the first attempt when the retry is no better and no longer', async () => {
-    xai = await fakeXai([
-      { text: 'first attempt, longer words here', duration: 56.7 },
-      { text: 'retry', duration: 57.0 },
-    ]);
-    setEnv('XAI_STT_URL', xai.url);
-
-    const res = await dictate();
-
-    expect(xai.calls).toBe(2);
-    expect(res.body.raw_text).toBe('first attempt, longer words here');
-    expect(res.body.status).toBe('error');
   });
 
   it('never flags a tier that does not report a decoded duration (the fallbacks)', async () => {
@@ -183,8 +239,24 @@ describe('/finish: a transcript that covers only part of the recording', () => {
 
     const res = await dictate();
 
-    expect(xai.calls).toBe(1);
+    expect(mockedDecode).not.toHaveBeenCalled();
     expect(res.body.status).toBe('completed');
+    expect(res.body.cleaned_text).not.toContain(NOTE_PREFIX);
     expect(fs.readdirSync(failedAudioDir)).toEqual([]);
+  });
+
+  it('converts even when the first decode was fine, when the flag forces it (lab proof path)', async () => {
+    config.forceAudioNormalise = true;
+    xai = await fakeXai([{ text: 'Converted whole dictation.', duration: 195.0 }]);
+    setEnv('XAI_STT_URL', xai.url);
+    mockedDecode.mockResolvedValue({ segments: [Buffer.from('seg0')], decodedSec: 195.0 });
+
+    const res = await dictate();
+
+    expect(mockedDecode).toHaveBeenCalledTimes(1);
+    expect(xai.calls).toBe(1); // no direct attempt: the converted audio is the attempt
+    expect(res.body.raw_text).toBe('Converted whole dictation.');
+    expect(res.body.status).toBe('completed');
+    expect(res.body.cleaned_text).not.toContain(NOTE_PREFIX);
   });
 });

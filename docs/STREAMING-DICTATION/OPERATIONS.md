@@ -140,7 +140,8 @@ All variables are read from `/root/voicenotebot/streaming-dictation/backend/.env
 | `RETENTION_DAYS` | No | `14` | Auto-delete transcripts after N days |
 | `DATABASE_PATH` | No | `data/transcripts.db` | SQLite file path |
 | `FAILED_AUDIO_DIR` | No | `data/failed-audio` | where failed dictations keep their audio for 24 h (see Retention); empty turns it off |
-| `SERVICE_TOKEN_FILE` | No | (none) | file holding a bearer token a local caller may use on `/api/recordings/*` only (the Wheelhouse's mic; `/root/.config/streaming-dictation/service-token`, 0600) |
+| `FFMPEG_PATH` | No | `/usr/bin/ffmpeg` | ffmpeg used only to re-decode a recording the upstream transcribed in part (see Transcription Coverage); the absolute path is the default so the unit's `PATH` does not matter |
+| `FORCE_AUDIO_NORMALISE` | No | off | `1` sends every dictation through the ffmpeg conversion — a laboratory switch for proving that path on a long real recording; leave it unset in production |
 
 ## Database
 
@@ -228,34 +229,46 @@ What the backend now does (`/finish`, `src/routes/recordings.ts`):
    chunks the transcript was made from (a reused speculative pass covers only the chunks it saw).
    `src/services/stt-coverage.ts`: a decode is short when it is more than 10 % (and more than 5 s) below that, so
    the Android app's few seconds of upload at Stop, and short dictations, are never false alarms.
-3. A short decode is retried once over the whole recording; the retry is used if it covers the recording or heard
-   more words.
-4. If it is still short the row is stored with **`status: 'error'`** — the partial words are kept in `raw_text`/
-   `cleaned_text` so they survive in history, and the audio is kept by the failed-audio store (`reason:
-   short-decode`) so the next occurrence can be diagnosed. The Wheelhouse turns an `error` row into its
-   `422 NO_WORDS`, i.e. the owner is told the dictation failed instead of being handed half a prompt.
+3. **The retry changes the bytes** (`src/services/audio-normalise.ts`, `src/services/stt-recovery.ts`): a second
+   identical request would decode the same part again, so ffmpeg re-decodes the whole recording to 16 kHz mono PCM
+   WAV and slices it into ≤ 90 s parts (`-f segment`, 90 s), which are transcribed in order and stitched with a
+   space. WAV was chosen over FLAC/Opus because it has no container to misread and was proven on the lab against
+   both xAI and the host's local ASR. ffmpeg runs only here, with a 60 s timeout, in a private temp dir that is
+   always removed; if ffmpeg is missing or fails, the previous behaviour (one plain retry) stands.
+4. ffmpeg's own decoded duration (`-progress pipe:1`) separates the two cases:
+   - it decodes ≥ 90 % of the recording → the audio was complete and the upstream lost part of it; the converted
+     transcript is used when it covers more, and the row is `completed` with no note;
+   - it decodes only what the upstream did → **the audio in hand is short** (the phone side): log `stt_audio_short`
+     with both durations and make no upstream call, because nothing upstream can recover audio that is not there.
+5. A transcript that is still short is stored and returned as **`completed`** with the words that were heard and
+   **one plain note line** appended after cleanup (never handed to the cleanup model):
+   `[Dictation cut short: only the first 0:57 of 3:16 was transcribed. The rest of the recording was lost.]`
+   The audio is kept by the failed-audio store (`reason: short-decode`) for 24 h. This is deliberate: an `error`
+   row reaches the apps as the centre's `422 NO_WORDS` ("No words were heard"), which throws away the words the
+   owner did get (owner, 2026-11-12).
 
-Log lines to grep for: `stt_short_decode_retry` (warn, with `decodedSec`/`expectedSec`), `stt_short_decode`
-(error, the transcript is refused), `stt_short_decode_retry_failed`, and `failed_audio_kept` with
-`reason: short-decode`.
+Log lines to grep for: `stt_short_decode_retry` (warn, with `decodedSec`/`expectedSec`/`forced`), `stt_audio_short`
+(warn — the recording itself is short; both durations), `stt_short_decode` (warn — the transcript is partial and
+carries the note), `stt_short_decode_retry_failed`, and `failed_audio_kept` with `reason: short-decode`.
 
 The tiers that report no duration (the local ASR service, OpenAI gpt-transcribe) are never flagged, so the
 fallback paths behave exactly as before.
 
 Still open: *why* xAI decoded only 57 s of that complete 191 s file is not proven — the owner's audio was not kept
-(the row completed, so it never reached the failed-audio store). With the guard in place the same failure now ends
-with the audio on disk and an explicit error, which makes the next occurrence diagnosable. Two candidate causes
-remain, and the kept audio decides between them: the app uploading a file that is itself short, or the upstream
-decoding a complete file only partly. The first belongs to `wheelhouse-apps` (recorder/upload), the second to a
-segmented retry on this side.
+(the row completed before the failed-audio store could see it). The guard plus the conversion now answer the
+question automatically on the next occurrence: `stt_audio_short` means the bytes on the wire were short (a
+`wheelhouse-apps` recorder/upload matter — see the lane's proposal), while a recovered transcript means the file was
+complete and the upstream was at fault. Either way the owner keeps the words that were heard plus one plain line
+saying what is missing.
 
 ## Performance Notes
 
 These are now part of normal runtime behaviour:
 - warmup endpoint exists to reduce initial latency
 - speculative transcription may begin before finish for longer recordings
-- a transcript that covers only part of the recording is retried once, then refused and its audio kept (see
-  Transcription Coverage above)
+- a transcript that covers only part of the recording is re-decoded with ffmpeg and transcribed in ≤ 90 s WAV
+  parts; if the audio itself is short the words are kept with one plain note line and the audio is kept for 24 h
+  (see Transcription Coverage above)
 - API responses are intentionally `no-store`
 - history polling is visibility-aware rather than constant in the background
 

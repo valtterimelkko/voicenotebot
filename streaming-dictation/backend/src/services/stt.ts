@@ -18,6 +18,18 @@ function localAsrUrl(): string {
   return process.env.LOCAL_ASR_URL || LOCAL_ASR_URL_DEFAULT;
 }
 
+/**
+ * What we tell the upstream the bytes are. WebM is the composer's own container and stays the default; the ffmpeg
+ * re-decode on a short transcript sends plain 16 kHz mono WAV parts instead (2026-11-12).
+ */
+export interface AudioFormat {
+  type: string;
+  name: string;
+}
+
+export const WEBM_FORMAT: AudioFormat = { type: 'audio/webm', name: 'audio.webm' };
+export const WAV_FORMAT: AudioFormat = { type: 'audio/wav', name: 'audio.wav' };
+
 export interface STTResult {
   text: string;
   model: string;
@@ -57,7 +69,12 @@ function toKeyterms(vocabulary?: string): string[] {
  * out; the cleanup model normalises both. The vocabulary becomes key terms.
  * xAI requires the `file` multipart field to come last.
  */
-async function xaiTranscribe(audioChunks: Buffer[], prompt?: string, language: SttLanguage = 'en'): Promise<STTResult> {
+async function xaiTranscribe(
+  audioChunks: Buffer[],
+  prompt?: string,
+  language: SttLanguage = 'en',
+  format: AudioFormat = WEBM_FORMAT,
+): Promise<STTResult> {
   if (!config.xaiApiKey) {
     throw new Error('XAI_API_KEY is not configured');
   }
@@ -66,7 +83,7 @@ async function xaiTranscribe(audioChunks: Buffer[], prompt?: string, language: S
   form.append('model', STT_MODEL);
   if (!isAuto(language)) form.append('language', language);
   for (const term of toKeyterms(prompt)) form.append('keyterm', term);
-  form.append('file', new Blob([new Uint8Array(audioBuffer)], { type: 'audio/webm' }), 'audio.webm');
+  form.append('file', new Blob([new Uint8Array(audioBuffer)], { type: format.type }), format.name);
   const response = await fetch(xaiSttUrl(), {
     method: 'POST',
     headers: { Authorization: `Bearer ${config.xaiApiKey}` },
@@ -95,11 +112,15 @@ async function xaiTranscribe(audioChunks: Buffer[], prompt?: string, language: S
  * 127.0.0.1:9000; Fluid Speech Mini since 2026-10-14). Free, offline, keeps
  * dictation working when the cloud route is down (slower: ~7 s per 47 s).
  */
-async function localTranscribe(audioChunks: Buffer[], language: SttLanguage = 'en'): Promise<STTResult> {
+async function localTranscribe(
+  audioChunks: Buffer[],
+  language: SttLanguage = 'en',
+  format: AudioFormat = WEBM_FORMAT,
+): Promise<STTResult> {
   const audioBuffer = Buffer.concat(audioChunks);
   const form = new FormData();
   if (!isAuto(language)) form.append('language', language);
-  form.append('audio_file', new Blob([new Uint8Array(audioBuffer)], { type: 'audio/webm' }), 'audio.webm');
+  form.append('audio_file', new Blob([new Uint8Array(audioBuffer)], { type: format.type }), format.name);
   const response = await fetch(localAsrUrl(), { method: 'POST', body: form });
   if (!response.ok) {
     throw new Error(`local ASR HTTP ${response.status}`);
@@ -121,10 +142,15 @@ async function localTranscribe(audioChunks: Buffer[], language: SttLanguage = 'e
  * successor model, not affected by the 2027-02-26 removal of the gpt-4o
  * family). Keeps dictation alive if both xAI and the local service are down.
  */
-async function openAITranscribe(audioChunks: Buffer[], prompt?: string, language: SttLanguage = 'en'): Promise<STTResult> {
+async function openAITranscribe(
+  audioChunks: Buffer[],
+  prompt?: string,
+  language: SttLanguage = 'en',
+  format: AudioFormat = WEBM_FORMAT,
+): Promise<STTResult> {
   const client = getSharedOpenAIClient();
   const audioBuffer = Buffer.concat(audioChunks);
-  const file = new File([audioBuffer], 'audio.webm', { type: 'audio/webm' });
+  const file = new File([audioBuffer], format.name, { type: format.type });
   const response = await client.audio.transcriptions.create({
     model: STT_FALLBACK_MODEL,
     file,
@@ -139,18 +165,23 @@ async function openAITranscribe(audioChunks: Buffer[], prompt?: string, language
   };
 }
 
-export async function transcribeWithFallback(audioChunks: Buffer[], prompt?: string, language: SttLanguage = 'en'): Promise<STTResult> {
+export async function transcribeWithFallback(
+  audioChunks: Buffer[],
+  prompt?: string,
+  language: SttLanguage = 'en',
+  format: AudioFormat = WEBM_FORMAT,
+): Promise<STTResult> {
   try {
-    return await xaiTranscribe(audioChunks, prompt, language);
+    return await xaiTranscribe(audioChunks, prompt, language, format);
   } catch (primaryError) {
     console.error('primary STT (xAI) failed, trying local ASR:', primaryError);
   }
   try {
-    return await localTranscribe(audioChunks, language);
+    return await localTranscribe(audioChunks, language, format);
   } catch (localError) {
     console.error('local ASR failed, falling back to OpenAI gpt-transcribe:', localError);
   }
-  return openAITranscribe(audioChunks, prompt, language);
+  return openAITranscribe(audioChunks, prompt, language, format);
 }
 
 export interface SpeculativeResult {
@@ -159,10 +190,15 @@ export interface SpeculativeResult {
   startedAt: number;
 }
 
-export function startSpeculativeTranscription(chunks: Buffer[], prompt?: string, language: SttLanguage = 'en'): SpeculativeResult {
+export function startSpeculativeTranscription(
+  chunks: Buffer[],
+  prompt?: string,
+  language: SttLanguage = 'en',
+  format: AudioFormat = WEBM_FORMAT,
+): SpeculativeResult {
   const chunksCopy = chunks.map(c => Buffer.from(c));
   return {
-    promise: transcribeWithFallback(chunksCopy, prompt, language),
+    promise: transcribeWithFallback(chunksCopy, prompt, language, format),
     chunkCount: chunks.length,
     startedAt: Date.now(),
   };

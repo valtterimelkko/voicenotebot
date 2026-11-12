@@ -27,3 +27,23 @@ export function decodedShort(decodedSec: number | undefined, expectedSec: number
   const slack = Math.max(SHORT_DECODE_MIN_SLACK_SEC, expectedSec * SHORT_DECODE_RATIO);
   return decodedSec + slack < expectedSec;
 }
+
+/** Seconds as the owner reads them: `0:57`, `3:16`, `1:02:05`. */
+export function formatClock(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = String(total % 60).padStart(2, '0');
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${secs}` : `${minutes}:${secs}`;
+}
+
+/**
+ * The one plain line appended after cleanup when the transcript is everything that could be recovered
+ * (owner, 2026-11-12: keep what was heard and say plainly that the rest is missing — never trade a partial
+ * dictation for the apps' "No words were heard").
+ */
+export function cutShortNote(decodedSec: number, expectedSec: number): string {
+  return `[Dictation cut short: only the first ${formatClock(decodedSec)} of ${formatClock(
+    expectedSec,
+  )} was transcribed. The rest of the recording was lost.]`;
+}

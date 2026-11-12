@@ -2,7 +2,8 @@ import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { DB } from '../db';
 import { transcribeWithFallback, startSpeculativeTranscription, shouldUseSpeculative, type SpeculativeResult, type STTResult } from '../services/stt';
-import { decodedShort } from '../services/stt-coverage';
+import { cutShortNote, decodedShort } from '../services/stt-coverage';
+import { transcribeConverted } from '../services/stt-recovery';
 import { cleanupTranscript, type CleanupModel } from '../services/cleanup';
 import { warmupConnections } from '../services/connectionPool';
 import { logger } from '../services/logger';
@@ -115,6 +116,8 @@ export function recordingsRouter(db: DB, opts: { now?: () => number } = {}): Rou
     let sttModel = '';
     let usedFallback = 0;
     let failure: FailedAudioReason | null = null;
+    /** The plain line appended after cleanup when only part of the recording could be transcribed. */
+    let shortNote = '';
 
     try {
       const hasSpeculative =
@@ -122,43 +125,92 @@ export function recordingsRouter(db: DB, opts: { now?: () => number } = {}): Rou
         shouldUseSpeculative(recording.speculative, recording.chunks.length);
 
       const totalChunks = Math.max(1, recording.chunks.length);
-      let sttResult: STTResult;
-      // The seconds of audio the result above was made from: a reused speculative pass covers only the chunks it saw.
-      let expectedSec = durationMs / 1000;
-      if (hasSpeculative && recording.speculative) {
-        sttResult = await recording.speculative.promise;
-        expectedSec = (durationMs / 1000) * (recording.speculative.chunkCount / totalChunks);
-      } else {
-        sttResult = await transcribeWithFallback(recording.chunks, sttVocabulary, sttLanguage);
+      const fullSec = durationMs / 1000;
+      let sttResult: STTResult | undefined;
+      // The seconds of audio the current result was made from: a reused speculative pass covers only the chunks it saw.
+      let expectedSec = fullSec;
+      if (!config.forceAudioNormalise) {
+        if (hasSpeculative && recording.speculative) {
+          sttResult = await recording.speculative.promise;
+          expectedSec = fullSec * (recording.speculative.chunkCount / totalChunks);
+        } else {
+          sttResult = await transcribeWithFallback(recording.chunks, sttVocabulary, sttLanguage);
+        }
       }
 
       // The upstream can answer 200 with only the part of the audio it managed to decode (owner, 2026-11-11: a
-      // 195 s dictation came back as 739 characters, silently). One retry over the whole recording, then the
-      // transcript is only accepted if it really covers what was dictated.
-      if (decodedShort(sttResult.decodedSec, expectedSec)) {
+      // 195 s dictation came back as 739 characters, silently). A second identical request would decode the same
+      // part again, so the retry re-decodes the recording with ffmpeg and transcribes the parts (round 2).
+      if (sttResult === undefined || decodedShort(sttResult.decodedSec, expectedSec)) {
         logger.warn({
           event: 'stt_short_decode_retry',
           requestId: req.requestId,
           recordingId: req.params.id,
-          decodedSec: sttResult.decodedSec,
+          decodedSec: sttResult?.decodedSec,
           expectedSec: Number(expectedSec.toFixed(2)),
-          textLength: sttResult.text.length,
+          textLength: sttResult?.text.length,
+          forced: config.forceAudioNormalise,
         });
-        try {
-          const retried = await transcribeWithFallback(recording.chunks, sttVocabulary, sttLanguage);
-          const retriedCovers = !decodedShort(retried.decodedSec, durationMs / 1000);
-          if (retriedCovers || retried.text.length > sttResult.text.length) {
-            sttResult = retried;
-            expectedSec = durationMs / 1000;
+
+        const converted = await transcribeConverted(
+          recording.chunks,
+          sttVocabulary,
+          sttLanguage,
+          expectedSec,
+        );
+        if (converted.kind === 'audio-short') {
+          // ffmpeg decoded only what the upstream did: the audio in hand is short, and the phone side owns that.
+          logger.warn({
+            event: 'stt_audio_short',
+            requestId: req.requestId,
+            recordingId: req.params.id,
+            decodedSec: converted.decodedSec,
+            expectedSec: Number(expectedSec.toFixed(2)),
+            upstreamDecodedSec: sttResult?.decodedSec,
+          });
+        } else if (converted.kind === 'converted') {
+          const better =
+            sttResult === undefined ||
+            !decodedShort(converted.decodedSec, fullSec) ||
+            (sttResult.decodedSec ?? 0) < (converted.decodedSec ?? 0) ||
+            converted.result.text.length > sttResult.text.length;
+          if (better) {
+            sttResult = converted.result;
+            expectedSec = fullSec;
           }
-        } catch (retryErr) {
+        } else if (sttResult !== undefined) {
+          // ffmpeg unusable: keep the old behaviour — one plain retry — rather than failing the dictation.
           logger.warn({
             event: 'stt_short_decode_retry_failed',
             requestId: req.requestId,
             recordingId: req.params.id,
-            error: errMessage(retryErr),
+            error: converted.error,
           });
+          try {
+            const retried = await transcribeWithFallback(recording.chunks, sttVocabulary, sttLanguage);
+            if (
+              !decodedShort(retried.decodedSec, fullSec) ||
+              (retried.decodedSec ?? 0) > (sttResult.decodedSec ?? 0) ||
+              retried.text.length > sttResult.text.length
+            ) {
+              sttResult = retried;
+              expectedSec = fullSec;
+            }
+          } catch (retryErr) {
+            logger.warn({
+              event: 'stt_short_decode_retry_failed',
+              requestId: req.requestId,
+              recordingId: req.params.id,
+              error: errMessage(retryErr),
+            });
+          }
         }
+      }
+
+      // Only reachable when the forced conversion path could not produce an attempt at all.
+      if (sttResult === undefined) {
+        sttResult = await transcribeWithFallback(recording.chunks, sttVocabulary, sttLanguage);
+        expectedSec = fullSec;
       }
 
       rawText = sttResult.text;
@@ -176,9 +228,9 @@ export function recordingsRouter(db: DB, opts: { now?: () => number } = {}): Rou
         rawText = '';
         failure = 'no-words';
       } else if (decodedShort(sttResult.decodedSec, expectedSec)) {
-        // The words are real but they are not the dictation: keep them for the history, keep the audio for
-        // diagnosis, and never let this reach the prompt box as a completed transcript.
-        logger.error({
+        // The words are real but they are not the dictation: keep them, keep the audio for diagnosis, and tell
+        // the owner in plain words that the rest was lost (never the apps' "No words were heard").
+        logger.warn({
           event: 'stt_short_decode',
           requestId: req.requestId,
           recordingId: req.params.id,
@@ -188,6 +240,7 @@ export function recordingsRouter(db: DB, opts: { now?: () => number } = {}): Rou
           rawLength: rawText.length,
         });
         failure = 'short-decode';
+        shortNote = cutShortNote(sttResult.decodedSec ?? 0, expectedSec);
       }
     } catch (err) {
       // Transcription totally failed. We still persist a row (with empty text)
@@ -221,7 +274,10 @@ export function recordingsRouter(db: DB, opts: { now?: () => number } = {}): Rou
       }
     }
 
-    const status = rawText && failure !== 'short-decode' ? 'completed' : 'error';
+    // The note is appended after cleanup and never handed to the cleanup model (owner, 2026-11-12).
+    if (shortNote !== '') cleanedText = `${cleanedText}\n\n${shortNote}`;
+
+    const status = rawText ? 'completed' : 'error';
 
     if (failure !== null && config.failedAudioDir !== '') {
       pruneFailedAudio(config.failedAudioDir);
