@@ -64,8 +64,8 @@ curl http://localhost:3100/health
 > is a separate systemd service and uses none of these containers.
 >
 > What was kept: the code, `.env`, the `docker-compose.yml` and the Redis data volume (`voicenotebot_redis_data`). The
-> host edge still routes `/voicenotebot*` on the API host to `voicenotebot-webhook:8000`; it answers 502 while the
-> stack is down.
+> Caddy route `/voicenotebot*` on the API host (which skipped Authelia) was removed later the same day (caddy-edge
+> `eb87e7b`). Turning the bot back on also means restoring that route from caddy-edge history, with the owner's OK.
 >
 > **To turn it back on** (only with the owner's say-so): create a new bot with BotFather and put its token in `.env`
 > (the old bot no longer exists), then run the commands below, set the Telegram webhook to the API host's
