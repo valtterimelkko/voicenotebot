@@ -13,14 +13,15 @@ npm run typecheck
 ```
 
 Result:
-- **137 tests passed**
+- **143 tests passed**
 - typecheck passed
 - lint passes
 
 ### The 11 Nov 2026 long-dictation guard
 
 `tests/stt-coverage.test.ts` (the decoded-duration comparison and the note's wording),
-`tests/audio-normalise.test.ts` (ffmpeg's progress parsing and segment discovery, with an injected runner) and
+`tests/audio-normalise.test.ts` (ffmpeg's progress parsing and segment discovery, with an injected runner),
+`tests/stt-recovery.test.ts` (parts run concurrently, are stitched by index, a failing part is reported not thrown) and
 `tests/finish-coverage.test.ts` (the `/finish` conversion, segmentation, stitching, note and kept audio, driven
 through the recordings router against a fake xAI endpoint) cover the fix described in
 [OPERATIONS](./OPERATIONS.md#transcription-coverage-long-dictations-11-nov-2026). They need no network and never run
@@ -118,6 +119,7 @@ Backend tests currently cover:
 | `tests/stt-coverage.test.ts` | Unit | Decoded-duration comparison and its tolerances |
 | `tests/finish-coverage.test.ts` | Integration | Short decode: conversion, segmented stitching, note, kept audio |
 | `tests/audio-normalise.test.ts` | Unit | ffmpeg progress parsing, segment order, temp-dir cleanup |
+| `tests/stt-recovery.test.ts` | Unit | Concurrent parts, stitching by index, part failure, short audio |
 
 ## Frontend Test Coverage
 

@@ -231,10 +231,15 @@ What the backend now does (`/finish`, `src/routes/recordings.ts`):
    the Android app's few seconds of upload at Stop, and short dictations, are never false alarms.
 3. **The retry changes the bytes** (`src/services/audio-normalise.ts`, `src/services/stt-recovery.ts`): a second
    identical request would decode the same part again, so ffmpeg re-decodes the whole recording to 16 kHz mono PCM
-   WAV and slices it into ≤ 90 s parts (`-f segment`, 90 s), which are transcribed in order and stitched with a
-   space. WAV was chosen over FLAC/Opus because it has no container to misread and was proven on the lab against
-   both xAI and the host's local ASR. ffmpeg runs only here, with a 60 s timeout, in a private temp dir that is
-   always removed; if ffmpeg is missing or fails, the previous behaviour (one plain retry) stands.
+   WAV and slices it into ≤ 90 s parts (`-f segment`, 90 s), which are transcribed **concurrently (at most 4 parts
+   in flight)** and stitched **by part index** with a space, so the text reads in the order the owner spoke whatever
+   order the answers arrive in. Concurrency is not cosmetic: four sequential parts made a 3 min dictation's finish
+   take ~40 s, four concurrent ones ~7.5 s (measured on the lab). WAV was chosen over FLAC/Opus because it has no
+   container to misread and was proven on the lab against both xAI and the host's local ASR. ffmpeg runs only here,
+   with a 60 s timeout, in a private temp dir that is always removed; if ffmpeg is missing or fails, the previous
+   behaviour (one plain retry) stands. If a converted part's fallback chain throws, the dictation does **not** become
+   an `stt-failed` error row: the first attempt's words are kept and the cut-short note added (`stt_short_decode_retry_failed`
+   carries the part's error), so a recovery can never end worse than the attempt it was recovering.
 4. ffmpeg's own decoded duration (`-progress pipe:1`) separates the two cases:
    - it decodes ≥ 90 % of the recording → the audio was complete and the upstream lost part of it; the converted
      transcript is used when it covers more, and the row is `completed` with no note;
@@ -249,7 +254,8 @@ What the backend now does (`/finish`, `src/routes/recordings.ts`):
 
 Log lines to grep for: `stt_short_decode_retry` (warn, with `decodedSec`/`expectedSec`/`forced`), `stt_audio_short`
 (warn — the recording itself is short; both durations), `stt_short_decode` (warn — the transcript is partial and
-carries the note), `stt_short_decode_retry_failed`, and `failed_audio_kept` with `reason: short-decode`.
+carries the note), `stt_short_decode_retry_failed` (ffmpeg unusable, or a converted part failed — both keep what was
+heard), and `failed_audio_kept` with `reason: short-decode`.
 
 The tiers that report no duration (the local ASR service, OpenAI gpt-transcribe) are never flagged, so the
 fallback paths behave exactly as before.

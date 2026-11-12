@@ -22,6 +22,16 @@ vi.mock('../src/services/cleanup', () => ({
   cleanupTranscript: vi.fn(async (text: string) => ({ cleanedText: text, model: 'gpt-5-nano' })),
 }));
 
+vi.mock('../src/services/connectionPool', () => ({
+  // The last-resort OpenAI tier must fail locally, so the suite never calls out.
+  getSharedOpenAIClient: () => ({
+    audio: { transcriptions: { create: async () => Promise.reject(new Error('no OpenAI in tests')) } },
+  }),
+  warmupConnections: async () => undefined,
+  isWarmedUp: () => true,
+  resetForTesting: () => undefined,
+}));
+
 vi.mock('../src/services/audio-normalise', () => ({
   decodeToSegments: vi.fn(),
   AudioDecodeError: class AudioDecodeError extends Error {},
@@ -40,7 +50,7 @@ interface FakeXai {
 }
 
 /** A fake xAI STT endpoint that answers each call from `answers` (the last one repeats). */
-function fakeXai(answers: Array<{ text: string; duration?: number }>): Promise<FakeXai> {
+function fakeXai(answers: Array<{ text?: string; duration?: number; status?: number }>): Promise<FakeXai> {
   const state: FakeXai = { url: '', calls: 0, bodies: [], close: () => {} };
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -49,8 +59,9 @@ function fakeXai(answers: Array<{ text: string; duration?: number }>): Promise<F
       const answer = answers[Math.min(state.calls, answers.length - 1)];
       state.calls += 1;
       state.bodies.push(Buffer.concat(chunks).toString('latin1'));
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(answer));
+      const status = answer.status ?? 200;
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(status === 200 ? answer : { error: 'upstream is down' }));
     });
   });
   return new Promise((resolve) => {
@@ -243,6 +254,23 @@ describe('/finish: a transcript that covers only part of the recording', () => {
     expect(res.body.status).toBe('completed');
     expect(res.body.cleaned_text).not.toContain(NOTE_PREFIX);
     expect(fs.readdirSync(failedAudioDir)).toEqual([]);
+  });
+
+  it('keeps the first attempt and adds the note when a converted part fails outright', async () => {
+    xai = await fakeXai([
+      { text: 'okay so actually two things now I am attaching', duration: 56.704 }, // the direct attempt
+      { status: 503 }, // every converted part fails: xAI down, the local tier dead, OpenAI mocked away
+    ]);
+    setEnv('XAI_STT_URL', xai.url);
+    mockedDecode.mockResolvedValue({ segments: [Buffer.from('seg0'), Buffer.from('seg1')], decodedSec: 195 });
+
+    const res = await dictate();
+
+    expect(xai.calls).toBe(3); // the direct attempt, then one failed request per part
+    expect(res.body.status).toBe('completed');
+    expect(res.body.raw_text).toBe('okay so actually two things now I am attaching');
+    expect(res.body.cleaned_text).toContain(NOTE_PREFIX);
+    expect(keptMeta().reason).toBe('short-decode');
   });
 
   it('converts even when the first decode was fine, when the flag forces it (lab proof path)', async () => {

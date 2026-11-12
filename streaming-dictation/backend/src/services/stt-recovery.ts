@@ -24,7 +24,13 @@ export type ConvertedOutcome =
       decodedSec: number | undefined;
     }
   | { kind: 'audio-short'; decodedSec: number }
-  | { kind: 'unavailable'; error: string };
+  /** ffmpeg itself was unusable: the caller keeps its previous behaviour. */
+  | { kind: 'unavailable'; error: string }
+  /** ffmpeg produced parts but transcribing one of them failed: the caller keeps the first attempt. */
+  | { kind: 'parts-failed'; error: string };
+
+/** How many parts may be in flight at once: four kept a 3 min dictation to ~10 s instead of ~40 s. */
+export const MAX_PARALLEL_PARTS = 4;
 
 /**
  * Decode the recording with ffmpeg and transcribe the parts in order, unless ffmpeg shows the audio itself is short.
@@ -53,15 +59,36 @@ export async function transcribeConverted(
     return { kind: 'audio-short', decodedSec: decoded.decodedSec };
   }
 
-  const texts: string[] = [];
+  // The parts go up concurrently, a pool of MAX_PARALLEL_PARTS at a time: sequential requests made the owner wait
+  // roughly the length of his own dictation after Stop. Results are written back by part index, so the transcript
+  // reads in the order he spoke whatever order the answers arrive in.
+  const parts: Array<STTResult | undefined> = new Array(decoded.segments.length).fill(undefined);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (let index = next++; index < decoded.segments.length; index = next++) {
+      const segment = decoded.segments[index];
+      if (segment === undefined) continue;
+      parts[index] = await transcribeWithFallback([segment], prompt, language, WAV_FORMAT);
+    }
+  };
+  const settled = await Promise.allSettled(
+    Array.from({ length: Math.min(MAX_PARALLEL_PARTS, decoded.segments.length) }, worker),
+  );
+  const failure = settled.find((outcome) => outcome.status === 'rejected');
+  if (failure !== undefined && failure.status === 'rejected') {
+    // One part failing must never turn a dictation that produced words into a failure: say so and let the caller
+    // keep what the first attempt heard (round 3, reviewer findings 2-3).
+    const reason: unknown = failure.reason;
+    return { kind: 'parts-failed', error: reason instanceof Error ? reason.message : String(reason) };
+  }
+
+  const texts = parts.map((part) => part?.text.trim() ?? '');
   let model = '';
   let usedFallback = false;
   let covered = 0;
-  let allReported = true;
-  // In order, one request per part: the transcript must read in the order the owner spoke.
-  for (const segment of decoded.segments) {
-    const part = await transcribeWithFallback([segment], prompt, language, WAV_FORMAT);
-    texts.push(part.text.trim());
+  let allReported = parts.every((part) => part !== undefined && part.decodedSec !== undefined);
+  for (const part of parts) {
+    if (part === undefined) continue;
     model = part.model;
     usedFallback = usedFallback || part.usedFallback;
     if (part.decodedSec === undefined) allReported = false;

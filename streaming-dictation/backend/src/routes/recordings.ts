@@ -178,6 +178,17 @@ export function recordingsRouter(db: DB, opts: { now?: () => number } = {}): Rou
             sttResult = converted.result;
             expectedSec = fullSec;
           }
+        } else if (converted.kind === 'parts-failed') {
+          // A converted part failed outright. The first attempt's words are real: keep them and the cut-short note
+          // below, never an error row (round 3, reviewer findings 2-3).
+          logger.warn({
+            event: 'stt_short_decode_retry_failed',
+            requestId: req.requestId,
+            recordingId: req.params.id,
+            error: converted.error,
+            decodedSec: sttResult?.decodedSec,
+            expectedSec: Number(expectedSec.toFixed(2)),
+          });
         } else if (sttResult !== undefined) {
           // ffmpeg unusable: keep the old behaviour — one plain retry — rather than failing the dictation.
           logger.warn({
