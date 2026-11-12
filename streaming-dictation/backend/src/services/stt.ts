@@ -22,6 +22,12 @@ export interface STTResult {
   text: string;
   model: string;
   usedFallback: boolean;
+  /**
+   * Seconds of audio the upstream says it actually decoded. xAI reports this (`duration`) even when it could only
+   * read part of the file, which is how a partial transcript is told apart from a whole one (2026-11-11). The other
+   * tiers report nothing.
+   */
+  decodedSec?: number;
 }
 
 /**
@@ -71,10 +77,17 @@ async function xaiTranscribe(audioChunks: Buffer[], prompt?: string, language: S
     const detail = await response.text().catch(() => '');
     throw new Error(`xAI STT HTTP ${response.status}: ${detail.slice(0, 200)}`);
   }
-  const payload = (await response.json()) as { text?: string };
+  const payload = (await response.json()) as { text?: string; duration?: number };
   const text = (payload.text ?? '').trim();
   if (!text) throw new Error('xAI STT returned an empty transcript');
-  return { text, model: STT_MODEL, usedFallback: false };
+  const decodedSec =
+    typeof payload.duration === 'number' && Number.isFinite(payload.duration) ? payload.duration : undefined;
+  return {
+    text,
+    model: STT_MODEL,
+    usedFallback: false,
+    ...(decodedSec !== undefined ? { decodedSec } : {}),
+  };
 }
 
 /**

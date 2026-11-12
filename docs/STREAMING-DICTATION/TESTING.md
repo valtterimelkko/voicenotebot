@@ -13,8 +13,16 @@ npm run typecheck
 ```
 
 Result:
-- **79 tests passed**
+- **125 tests passed**
 - typecheck passed
+- lint passes
+
+### The 11 Nov 2026 long-dictation guard
+
+`tests/stt-coverage.test.ts` (the decoded-duration comparison) and `tests/finish-coverage.test.ts` (the `/finish`
+retry, refusal and kept audio, driven through the recordings router against a fake xAI endpoint) cover the fix
+described in [OPERATIONS](./OPERATIONS.md#transcription-coverage-long-dictations-11-nov-2026). They need no network:
+no real transcription is called.
 
 ### Frontend
 
@@ -88,6 +96,7 @@ Backend tests currently cover:
 - connection warmup support
 - end-to-end authenticated recording flow
 - graceful handling of STT and cleanup failures
+- transcript coverage: a short upstream decode is retried once, then refused (`status: error`) with the audio kept
 
 ### Backend test files
 
@@ -103,6 +112,8 @@ Backend tests currently cover:
 | `tests/retention.test.ts` | Unit | Expiry deletion |
 | `tests/connectionPool.test.ts` | Unit | Warmup/connection helpers |
 | `tests/e2e.test.ts` | Integration | Full login → recording → transcript → search flow |
+| `tests/stt-coverage.test.ts` | Unit | Decoded-duration comparison and its tolerances |
+| `tests/finish-coverage.test.ts` | Integration | Short decode: one retry, refusal, kept audio |
 
 ## Frontend Test Coverage
 

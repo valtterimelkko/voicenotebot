@@ -193,17 +193,69 @@ dictations are saved in this history like any other. Details: `/root/command-cen
 - The retention period can be changed via env or settings API.
 - In-progress recordings are **not** protected by the database; they live in memory until finish.
 - **Failed dictations keep their audio for 24 hours** (owner, 30 Oct 2026), for every caller (this PWA, the
-  Wheelhouse web UI and apps). Only a finish that heard no words or whose transcription failed outright is kept:
+  Wheelhouse web UI and apps). A finish that heard no words, whose transcription failed outright, or whose
+  transcription covered only part of the recording (`short-decode`, see below) is kept:
   `data/failed-audio/<id>.audio` (the chunks joined in arrival order) and `<id>.json` (reason, duration, each
   chunk's size, the sniffed container, and `headerChunks` — which chunks open with a container header; a header
   anywhere but chunk 0 means the chunks arrived out of order). Folder 0700, files 0600, pruned at boot and hourly.
   The log line is `failed_audio_kept`. Successful dictations keep no audio.
+
+## Transcription Coverage (long dictations, 11 Nov 2026)
+
+A 3 min 15 s dictation on the Wheelhouse **Android** app came back as 739 characters — a bit more than a quarter
+of what was said, ending mid-sentence — with no error and `status: completed`. The record is
+`bea6cab5-6a1e-47e0-9341-703f0992d09c`: `duration_ms` 195,559, `stt_model` grok-voice-transcribe-2.0,
+`used_fallback` 0, and 48 `/stream` posts (48 × 24,000 B ≈ 1.15 MB ≈ 191 s of the app's 48 kbit/s m4a), so the
+whole file did arrive. The web composer's long dictations (WebM/Opus, streamed one chunk per second) were fine.
+
+What was established on a disposable lab backend (never production):
+
+- **xAI answers `200` with only the part of the audio it could decode**, and says how much it decoded in a
+  `duration` field next to `text`. A recording whose container claims 278 s but whose media data stops at 56.7 s
+  returns `{ text: <the first 56.7 s>, duration: 56.704 }` — no error, no warning. That is exactly the production
+  shape (739 characters ≈ 57 s of speech, 4.0 chars per second of recording).
+- **The container label is not the cause.** `stt.ts` has always posted every recording as `audio/webm` whatever
+  arrived. A complete 278 s, 16 kHz mono, 48 kbit/s AAC/`.m4a` file with the phone's own atom layout
+  (`ftyp`/`moov`-front/`free`/`mdat`) came back whole when labelled `audio/webm`: 45/45 sentences, 3,871 chars,
+  13.9 chars/s. The host's local ASR accepted the same file with either label too. So sniffing the container to
+  fix a label would have changed nothing; it was left alone.
+- **Length and size are not the cause.** The same 278 s file (1.77 MB, 74 chunks) is transcribed whole.
+
+What the backend now does (`/finish`, `src/routes/recordings.ts`):
+
+1. xAI's `duration` is carried through as `STTResult.decodedSec`.
+2. It is compared with the seconds the recording should hold — the server's `/start`→`/finish` clock, scaled to the
+   chunks the transcript was made from (a reused speculative pass covers only the chunks it saw).
+   `src/services/stt-coverage.ts`: a decode is short when it is more than 10 % (and more than 5 s) below that, so
+   the Android app's few seconds of upload at Stop, and short dictations, are never false alarms.
+3. A short decode is retried once over the whole recording; the retry is used if it covers the recording or heard
+   more words.
+4. If it is still short the row is stored with **`status: 'error'`** — the partial words are kept in `raw_text`/
+   `cleaned_text` so they survive in history, and the audio is kept by the failed-audio store (`reason:
+   short-decode`) so the next occurrence can be diagnosed. The Wheelhouse turns an `error` row into its
+   `422 NO_WORDS`, i.e. the owner is told the dictation failed instead of being handed half a prompt.
+
+Log lines to grep for: `stt_short_decode_retry` (warn, with `decodedSec`/`expectedSec`), `stt_short_decode`
+(error, the transcript is refused), `stt_short_decode_retry_failed`, and `failed_audio_kept` with
+`reason: short-decode`.
+
+The tiers that report no duration (the local ASR service, OpenAI gpt-transcribe) are never flagged, so the
+fallback paths behave exactly as before.
+
+Still open: *why* xAI decoded only 57 s of that complete 191 s file is not proven — the owner's audio was not kept
+(the row completed, so it never reached the failed-audio store). With the guard in place the same failure now ends
+with the audio on disk and an explicit error, which makes the next occurrence diagnosable. Two candidate causes
+remain, and the kept audio decides between them: the app uploading a file that is itself short, or the upstream
+decoding a complete file only partly. The first belongs to `wheelhouse-apps` (recorder/upload), the second to a
+segmented retry on this side.
 
 ## Performance Notes
 
 These are now part of normal runtime behaviour:
 - warmup endpoint exists to reduce initial latency
 - speculative transcription may begin before finish for longer recordings
+- a transcript that covers only part of the recording is retried once, then refused and its audio kept (see
+  Transcription Coverage above)
 - API responses are intentionally `no-store`
 - history polling is visibility-aware rather than constant in the background
 

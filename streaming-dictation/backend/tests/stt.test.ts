@@ -294,3 +294,49 @@ describe('speculative transcription contract (unchanged)', () => {
     expect(shouldUseSpeculative(spec, 20)).toBe(false);  // 10/20 new >= 0.3
   });
 });
+
+describe('the decoded duration xAI reports next to the transcript', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    configState.xaiApiKey = 'test-xai-key';
+    setEnv('XAI_STT_URL', undefined);
+    setEnv('LOCAL_ASR_URL', undefined);
+  });
+
+  it('carries xAI\'s duration through as decodedSec', async () => {
+    const fake = await fakeSttServer(200, { text: 'primary text', duration: 56.704 });
+    setEnv('XAI_STT_URL', fake.url);
+    try {
+      const result = await transcribeWithFallback([Buffer.from('audio')]);
+      expect(result.decodedSec).toBe(56.704);
+    } finally {
+      fake.close();
+    }
+  });
+
+  it('leaves decodedSec unset when the answer carries no duration', async () => {
+    const fake = await fakeSttServer(200, { text: 'primary text' });
+    setEnv('XAI_STT_URL', fake.url);
+    try {
+      const result = await transcribeWithFallback([Buffer.from('audio')]);
+      expect(result.decodedSec).toBeUndefined();
+    } finally {
+      fake.close();
+    }
+  });
+
+  it('leaves decodedSec unset on the local ASR fallback', async () => {
+    const xaiFail = await fakeSttServer(500, { error: 'down' });
+    const local = await fakeSttServer(200, { text: 'local text', duration: 12 });
+    setEnv('XAI_STT_URL', xaiFail.url);
+    setEnv('LOCAL_ASR_URL', local.url);
+    try {
+      const result = await transcribeWithFallback([Buffer.from('audio')]);
+      expect(result.model).toBe('local-asr');
+      expect(result.decodedSec).toBeUndefined();
+    } finally {
+      xaiFail.close();
+      local.close();
+    }
+  });
+});

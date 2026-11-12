@@ -8,7 +8,7 @@ import path from 'path';
  * a header anywhere but chunk 0 means the chunks arrived out of order.
  */
 
-export type FailedAudioReason = 'no-words' | 'stt-failed';
+export type FailedAudioReason = 'no-words' | 'stt-failed' | 'short-decode';
 
 export interface KeepFailedAudioInput {
   dir: string;

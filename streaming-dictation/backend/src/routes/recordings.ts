@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { DB } from '../db';
-import { transcribeWithFallback, startSpeculativeTranscription, shouldUseSpeculative, type SpeculativeResult } from '../services/stt';
+import { transcribeWithFallback, startSpeculativeTranscription, shouldUseSpeculative, type SpeculativeResult, type STTResult } from '../services/stt';
+import { decodedShort } from '../services/stt-coverage';
 import { cleanupTranscript, type CleanupModel } from '../services/cleanup';
 import { warmupConnections } from '../services/connectionPool';
 import { logger } from '../services/logger';
@@ -37,8 +38,9 @@ interface SettingsRow {
   stt_language: string;
 }
 
-export function recordingsRouter(db: DB): Router {
+export function recordingsRouter(db: DB, opts: { now?: () => number } = {}): Router {
   const router = Router();
+  const now = opts.now ?? Date.now;
 
   router.post('/warmup', async (_req: Request, res: Response) => {
     await warmupConnections();
@@ -49,7 +51,7 @@ export function recordingsRouter(db: DB): Router {
     const id = uuidv4();
     const recording: ActiveRecording = {
       chunks: [],
-      startedAt: Date.now(),
+      startedAt: now(),
       speculative: null,
     };
     activeRecordings.set(id, recording);
@@ -98,7 +100,7 @@ export function recordingsRouter(db: DB): Router {
 
     activeRecordings.delete(req.params.id);
 
-    const durationMs = Date.now() - recording.startedAt;
+    const durationMs = now() - recording.startedAt;
 
     const settings = db.prepare(
       'SELECT default_cleanup_model, retention_days, stt_vocabulary, stt_language FROM user_settings WHERE id = 1'
@@ -119,12 +121,46 @@ export function recordingsRouter(db: DB): Router {
         recording.speculative !== null &&
         shouldUseSpeculative(recording.speculative, recording.chunks.length);
 
-      let sttResult;
+      const totalChunks = Math.max(1, recording.chunks.length);
+      let sttResult: STTResult;
+      // The seconds of audio the result above was made from: a reused speculative pass covers only the chunks it saw.
+      let expectedSec = durationMs / 1000;
       if (hasSpeculative && recording.speculative) {
         sttResult = await recording.speculative.promise;
+        expectedSec = (durationMs / 1000) * (recording.speculative.chunkCount / totalChunks);
       } else {
         sttResult = await transcribeWithFallback(recording.chunks, sttVocabulary, sttLanguage);
       }
+
+      // The upstream can answer 200 with only the part of the audio it managed to decode (owner, 2026-11-11: a
+      // 195 s dictation came back as 739 characters, silently). One retry over the whole recording, then the
+      // transcript is only accepted if it really covers what was dictated.
+      if (decodedShort(sttResult.decodedSec, expectedSec)) {
+        logger.warn({
+          event: 'stt_short_decode_retry',
+          requestId: req.requestId,
+          recordingId: req.params.id,
+          decodedSec: sttResult.decodedSec,
+          expectedSec: Number(expectedSec.toFixed(2)),
+          textLength: sttResult.text.length,
+        });
+        try {
+          const retried = await transcribeWithFallback(recording.chunks, sttVocabulary, sttLanguage);
+          const retriedCovers = !decodedShort(retried.decodedSec, durationMs / 1000);
+          if (retriedCovers || retried.text.length > sttResult.text.length) {
+            sttResult = retried;
+            expectedSec = durationMs / 1000;
+          }
+        } catch (retryErr) {
+          logger.warn({
+            event: 'stt_short_decode_retry_failed',
+            requestId: req.requestId,
+            recordingId: req.params.id,
+            error: errMessage(retryErr),
+          });
+        }
+      }
+
       rawText = sttResult.text;
       sttModel = sttResult.model;
       usedFallback = sttResult.usedFallback ? 1 : 0;
@@ -139,6 +175,19 @@ export function recordingsRouter(db: DB): Router {
         });
         rawText = '';
         failure = 'no-words';
+      } else if (decodedShort(sttResult.decodedSec, expectedSec)) {
+        // The words are real but they are not the dictation: keep them for the history, keep the audio for
+        // diagnosis, and never let this reach the prompt box as a completed transcript.
+        logger.error({
+          event: 'stt_short_decode',
+          requestId: req.requestId,
+          recordingId: req.params.id,
+          sttModel,
+          decodedSec: sttResult.decodedSec,
+          expectedSec: Number(expectedSec.toFixed(2)),
+          rawLength: rawText.length,
+        });
+        failure = 'short-decode';
       }
     } catch (err) {
       // Transcription totally failed. We still persist a row (with empty text)
@@ -172,7 +221,7 @@ export function recordingsRouter(db: DB): Router {
       }
     }
 
-    const status = rawText ? 'completed' : 'error';
+    const status = rawText && failure !== 'short-decode' ? 'completed' : 'error';
 
     if (failure !== null && config.failedAudioDir !== '') {
       pruneFailedAudio(config.failedAudioDir);
