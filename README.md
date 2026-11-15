@@ -5,7 +5,7 @@ VoiceNote Bot is a self-hosted dictation project built for people who work with 
 It contains two related systems:
 
 1. **Streaming Dictation** — the current browser-based PWA for fast dictation across phone and laptop
-2. **Legacy Telegram Bot** — the original queue-based voice-note transcription bot, still kept as a useful fallback path
+2. **Legacy Telegram Bot** — the original queue-based voice-note transcription bot, kept in the repo as a useful fallback path but switched off on 2026-11-12 (see [`docs/MAINTAINER-RUNBOOK.md`](docs/MAINTAINER-RUNBOOK.md) for what was removed and how to turn it back on)
 
 ## Why this exists
 
@@ -71,7 +71,7 @@ It is designed for lower-latency dictation by warming up the transcription path 
 
 ### Legacy Telegram Bot
 
-The Telegram bot is the original architecture and remains valuable as a fallback.
+The Telegram bot is the original architecture and remains valuable as a fallback, though it was switched off on 2026-11-12 (see [`docs/MAINTAINER-RUNBOOK.md`](docs/MAINTAINER-RUNBOOK.md)).
 
 It is naturally a little slower because the workflow is more batch-like: record, send, process, return. But it is still useful and robust.
 
@@ -130,7 +130,7 @@ cd ../frontend && npm install && npm run build
 sudo cp streaming-dictation/systemd/streaming-dictation.service /etc/systemd/system/ && sudo systemctl enable --now streaming-dictation
 ```
 
-Legacy Telegram bot: `cp .env.example .env && docker compose up -d` — see docs map below.
+Legacy Telegram bot (switched off on 2026-11-12 — to turn it back on, put a new bot token in `.env` first and follow the re-enable steps in [`docs/MAINTAINER-RUNBOOK.md`](docs/MAINTAINER-RUNBOOK.md)): `cp .env.example .env && docker compose up -d` — see docs map below.
 
 ## Documentation map
 
